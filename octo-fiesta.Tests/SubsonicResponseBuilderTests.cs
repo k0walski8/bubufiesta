@@ -346,4 +346,27 @@ public class SubsonicResponseBuilderTests
         Assert.Equal(0, albumData.GetProperty("songCount").GetInt32());
         Assert.Equal(0, albumData.GetProperty("duration").GetInt32());
     }
+
+    [Fact]
+    public void ConvertAlbumToJson_IncludesAlbumId3RequiredFields()
+    {
+        // Arrange
+        var album = new Album
+        {
+            Id = "album123",
+            Title = "Test Album",
+            SongCount = 1,
+            Year = 2025
+        };
+
+        // Act
+        var converted = Assert.IsType<Dictionary<string, object>>(_builder.ConvertAlbumToJson(album));
+
+        // Assert
+        Assert.Equal("album123", converted["id"]);
+        Assert.Equal("Test Album", converted["name"]);
+        Assert.Equal(1, converted["songCount"]);
+        Assert.Equal(0, converted["duration"]);
+        Assert.Equal("2025-01-01T00:00:00.0000000Z", converted["created"]);
+    }
 }

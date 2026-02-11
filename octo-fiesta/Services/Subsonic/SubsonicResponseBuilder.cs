@@ -96,6 +96,7 @@ public class SubsonicResponseBuilder
     public IActionResult CreateAlbumResponse(string format, Album album)
     {
         var totalDuration = album.Songs.Sum(s => s.Duration ?? 0);
+        var created = BuildAlbumCreatedTimestamp(album.Year);
         
         if (format == "json")
         {
@@ -115,6 +116,7 @@ public class SubsonicResponseBuilder
                     year = album.Year ?? 0,
                     genre = album.Genre ?? "",
                     isCompilation = false,
+                    created,
                     song = (album.Songs ?? Enumerable.Empty<Song>()).Select(s => ConvertSongToJson(s)).ToList()
                 }
             });
@@ -133,6 +135,7 @@ public class SubsonicResponseBuilder
                     new XAttribute("songCount", album.Songs?.Count ?? album.SongCount ?? 0),
                     new XAttribute("duration", totalDuration),
                     new XAttribute("year", album.Year ?? 0),
+                    new XAttribute("created", created),
                     new XAttribute("coverArt", album.Id),
                     (album.Songs?.Select(s => ConvertSongToXml(s, ns, album.Id)) ?? Enumerable.Empty<XElement>())
                 )
@@ -148,6 +151,9 @@ public class SubsonicResponseBuilder
     public IActionResult CreatePlaylistAsAlbumResponse(string format, ExternalPlaylist playlist, List<Song> tracks)
     {
         var totalDuration = tracks.Sum(s => s.Duration ?? 0);
+        var created = playlist.CreatedDate.HasValue
+            ? playlist.CreatedDate.Value.ToUniversalTime().ToString("o")
+            : BuildAlbumCreatedTimestamp(playlist.CreatedDate?.Year);
         
         // Build artist name with emoji and curator
         var artistName = $"🎵 {char.ToUpper(playlist.Provider[0])}{playlist.Provider.Substring(1)}";
@@ -176,7 +182,7 @@ public class SubsonicResponseBuilder
                     year = playlist.CreatedDate?.Year ?? 0,
                     genre = "Playlist",
                     isCompilation = false,
-                    created = playlist.CreatedDate.HasValue ? playlist.CreatedDate.Value.ToUniversalTime().ToString("o") : null,
+                    created,
                     song = tracks.Select(s => ConvertSongToJson(s)).ToList()
                 }
             });
@@ -191,13 +197,13 @@ public class SubsonicResponseBuilder
             new XAttribute("songCount", tracks.Count),
             new XAttribute("duration", totalDuration),
             new XAttribute("genre", "Playlist"),
+            new XAttribute("created", created),
             new XAttribute("coverArt", playlist.Id)
         );
         
         if (playlist.CreatedDate.HasValue)
         {
             albumElement.Add(new XAttribute("year", playlist.CreatedDate.Value.Year));
-            albumElement.Add(new XAttribute("created", playlist.CreatedDate.Value.ToUniversalTime().ToString("o")));
         }
         
         // Add songs
@@ -348,6 +354,9 @@ public class SubsonicResponseBuilder
     /// </summary>
     public object ConvertAlbumToJson(Album album)
     {
+        var duration = album.Songs?.Sum(s => s.Duration ?? 0) ?? 0;
+        var created = BuildAlbumCreatedTimestamp(album.Year);
+
         var result = new Dictionary<string, object>
         {
             ["id"] = album.Id,
@@ -355,6 +364,8 @@ public class SubsonicResponseBuilder
             ["artist"] = album.Artist ?? "",
             ["artistId"] = album.ArtistId ?? "",
             ["songCount"] = album.SongCount ?? 0,
+            ["duration"] = duration,
+            ["created"] = created,
             ["year"] = album.Year ?? 0
         };
 
@@ -476,6 +487,7 @@ public class SubsonicResponseBuilder
     public XElement ConvertAlbumToXml(Album album, XNamespace ns)
     {
         var totalDuration = album.Songs?.Sum(s => s.Duration ?? 0) ?? 0;
+        var created = BuildAlbumCreatedTimestamp(album.Year);
         var element = new XElement(ns + "album",
             new XAttribute("id", album.Id),
             new XAttribute("name", album.Title),
@@ -483,6 +495,7 @@ public class SubsonicResponseBuilder
             new XAttribute("artistId", album.ArtistId ?? string.Empty),
             new XAttribute("songCount", album.Songs?.Count ?? album.SongCount ?? 0),
             new XAttribute("duration", totalDuration),
+            new XAttribute("created", created),
             new XAttribute("year", album.Year ?? 0)
         );
 
@@ -584,5 +597,15 @@ public class SubsonicResponseBuilder
             JsonValueKind.Null => null!,
             _ => value.ToString()
         };
+    }
+
+    private static string BuildAlbumCreatedTimestamp(int? year)
+    {
+        if (year.HasValue && year.Value > 0 && year.Value <= 9999)
+        {
+            return new DateTime(year.Value, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToString("o");
+        }
+
+        return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToString("o");
     }
 }

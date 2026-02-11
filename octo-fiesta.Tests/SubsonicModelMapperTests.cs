@@ -221,6 +221,35 @@ public class SubsonicModelMapperTests
     }
 
     [Fact]
+    public void MergeSearchResults_Json_ExternalAlbumIncludesRequiredAlbumId3Fields()
+    {
+        // Arrange
+        var externalResult = new SearchResult
+        {
+            Songs = new List<Song>(),
+            Albums = new List<Album>
+            {
+                new Album { Id = "album1", Title = "Album 1", SongCount = 1, Year = 2025 }
+            },
+            Artists = new List<Artist>()
+        };
+
+        // Act
+        var (mergedSongs, mergedAlbums, mergedArtists) = _mapper.MergeSearchResults(
+            new List<object>(), new List<object>(), new List<object>(), externalResult, new List<ExternalPlaylist>(), true);
+
+        // Assert
+        Assert.Empty(mergedSongs);
+        Assert.Single(mergedAlbums);
+        Assert.Empty(mergedArtists);
+
+        var album = Assert.IsType<Dictionary<string, object>>(mergedAlbums[0]);
+        Assert.Equal(1, album["songCount"]);
+        Assert.Equal(0, album["duration"]);
+        Assert.Equal("2025-01-01T00:00:00.0000000Z", album["created"]);
+    }
+
+    [Fact]
     public void MergeSearchResults_Xml_MergesSongsCorrectly()
     {
         // Arrange

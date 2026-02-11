@@ -245,13 +245,15 @@ public class SubsonicModelMapper
             ["artistId"] = artistId,
             ["genre"] = "Playlist",
             ["songCount"] = playlist.TrackCount,
-            ["duration"] = playlist.Duration
+            ["duration"] = playlist.Duration,
+            ["created"] = playlist.CreatedDate.HasValue
+                ? playlist.CreatedDate.Value.ToUniversalTime().ToString("o")
+                : new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToString("o")
         };
         
         if (playlist.CreatedDate.HasValue)
         {
             album["year"] = playlist.CreatedDate.Value.Year;
-            album["created"] = playlist.CreatedDate.Value.ToUniversalTime().ToString("o");
         }
         
         if (!string.IsNullOrEmpty(playlist.CoverUrl))
@@ -283,13 +285,15 @@ public class SubsonicModelMapper
             new XAttribute("artistId", artistId),
             new XAttribute("genre", "Playlist"),
             new XAttribute("songCount", playlist.TrackCount),
-            new XAttribute("duration", playlist.Duration)
+            new XAttribute("duration", playlist.Duration),
+            new XAttribute("created", playlist.CreatedDate.HasValue
+                ? playlist.CreatedDate.Value.ToUniversalTime().ToString("o")
+                : new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToString("o"))
         );
         
         if (playlist.CreatedDate.HasValue)
         {
             album.Add(new XAttribute("year", playlist.CreatedDate.Value.Year));
-            album.Add(new XAttribute("created", playlist.CreatedDate.Value.ToUniversalTime().ToString("o")));
         }
         
         if (!string.IsNullOrEmpty(playlist.CoverUrl))
