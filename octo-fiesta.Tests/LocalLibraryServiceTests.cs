@@ -209,6 +209,10 @@ public class LocalLibraryServiceTests : IDisposable
     [InlineData("ext-tidal-999-888", true, "tidal", "999-888")]
     [InlineData("ext-deezer-song-123456", true, "deezer", "123456")]  // New format - extracts numeric ID
     [InlineData("ext-SquidWTF-Song-345949499", true, "squidwtf", "345949499")] // Mixed case provider/type
+    [InlineData("track://ext-squidwtf-song-345949499", true, "squidwtf", "345949499")] // URI-wrapped format
+    [InlineData("track://ext-squidwtf-song-345949499?source=ma", true, "squidwtf", "345949499")] // URI-wrapped format with query
+    [InlineData("album://ext-squidwtf-album-br7ad0ufcms0b", true, "squidwtf", "br7ad0ufcms0b")] // URI-wrapped album format
+    [InlineData("track://opensubsonic--zvFBBaob/ext-squidwtf-song-345949499", true, "squidwtf", "345949499")] // URI with provider scope
     [InlineData("123456", false, null, null)]
     [InlineData("", false, null, null)]
     [InlineData("ext-", false, null, null)]
@@ -230,6 +234,10 @@ public class LocalLibraryServiceTests : IDisposable
     [InlineData("ext-deezer-artist-259", true, "deezer", "artist", "259")]
     [InlineData("ext-spotify-song-abc123", true, "spotify", "song", "abc123")]
     [InlineData("ext-SquidWTF-Song-345949499", true, "squidwtf", "song", "345949499")] // Mixed case provider/type
+    [InlineData("track://ext-squidwtf-song-345949499", true, "squidwtf", "song", "345949499")] // URI-wrapped format
+    [InlineData("track://ext-squidwtf-song-345949499?source=ma", true, "squidwtf", "song", "345949499")] // URI-wrapped format with query
+    [InlineData("album://ext-squidwtf-album-br7ad0ufcms0b", true, "squidwtf", "album", "br7ad0ufcms0b")] // URI-wrapped album format
+    [InlineData("track://opensubsonic--zvFBBaob/ext-squidwtf-song-345949499", true, "squidwtf", "song", "345949499")] // URI with provider scope
     [InlineData("ext-deezer-123", true, "deezer", "song", "123")]  // Legacy format defaults to song
     [InlineData("ext-tidal-999", true, "tidal", "song", "999")]    // Legacy format defaults to song
     [InlineData("123456", false, null, null, null)]

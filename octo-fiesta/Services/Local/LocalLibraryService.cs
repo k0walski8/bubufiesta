@@ -119,12 +119,14 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
 
     public (bool isExternal, string? provider, string? type, string? externalId) ParseExternalId(string id)
     {
-        if (!id.StartsWith("ext-"))
+        var normalizedId = NormalizeExternalResourceId(id);
+
+        if (!normalizedId.StartsWith("ext-", StringComparison.OrdinalIgnoreCase))
         {
             return (false, null, null, null);
         }
         
-        var parts = id.Split('-');
+        var parts = normalizedId.Split('-');
         
         // Known types for the new format
         var knownTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "song", "album", "artist" };
@@ -149,6 +151,52 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         }
         
         return (false, null, null, null);
+    }
+
+    private static string NormalizeExternalResourceId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return id;
+        }
+
+        var normalized = id.Trim();
+        var schemeSeparatorIndex = normalized.IndexOf("://", StringComparison.Ordinal);
+        if (schemeSeparatorIndex < 0)
+        {
+            return normalized;
+        }
+
+        var withoutScheme = normalized[(schemeSeparatorIndex + 3)..];
+        if (string.IsNullOrWhiteSpace(withoutScheme))
+        {
+            return withoutScheme;
+        }
+
+        var delimiterIndex = withoutScheme.IndexOfAny(new[] { '?', '#' });
+        if (delimiterIndex >= 0)
+        {
+            withoutScheme = withoutScheme[..delimiterIndex];
+        }
+
+        // Common MA/OpenSubsonic form: track://ext-provider-song-123
+        if (withoutScheme.StartsWith("ext-", StringComparison.OrdinalIgnoreCase))
+        {
+            return withoutScheme;
+        }
+
+        // Some clients include an extra provider scope: track://provider-instance/ext-provider-song-123
+        var slashIndex = withoutScheme.LastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex < withoutScheme.Length - 1)
+        {
+            var tail = withoutScheme[(slashIndex + 1)..];
+            if (tail.StartsWith("ext-", StringComparison.OrdinalIgnoreCase))
+            {
+                return tail;
+            }
+        }
+
+        return withoutScheme;
     }
 
     private async Task<Dictionary<string, LocalSongMapping>> LoadMappingsAsync()
