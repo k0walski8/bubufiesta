@@ -369,4 +369,45 @@ public class SubsonicResponseBuilderTests
         Assert.Equal(0, converted["duration"]);
         Assert.Equal("2025-01-01T00:00:00.0000000Z", converted["created"]);
     }
+
+    [Fact]
+    public void ConvertSongToJson_UsesAlbumCoverArtIdWhenAlbumIdPresent()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-squidwtf-song-345949499",
+            Title = "Test Song",
+            AlbumId = "ext-squidwtf-album-111",
+            CoverArtUrl = null,
+            IsLocal = false
+        };
+
+        // Act
+        var converted = _builder.ConvertSongToJson(song);
+
+        // Assert
+        Assert.Equal("ext-squidwtf-album-111", converted["coverArt"]);
+    }
+
+    [Fact]
+    public void ConvertSongToXml_UsesAlbumCoverArtIdWhenAlbumIdPresent()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-squidwtf-song-345949499",
+            Title = "Test Song",
+            AlbumId = "ext-squidwtf-album-111",
+            CoverArtUrl = null,
+            IsLocal = false
+        };
+        var ns = XNamespace.Get("http://subsonic.org/restapi");
+
+        // Act
+        var converted = _builder.ConvertSongToXml(song, ns);
+
+        // Assert
+        Assert.Equal("ext-squidwtf-album-111", converted.Attribute("coverArt")?.Value);
+    }
 }

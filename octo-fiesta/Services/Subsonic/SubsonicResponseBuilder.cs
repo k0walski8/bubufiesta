@@ -117,7 +117,7 @@ public class SubsonicResponseBuilder
                     genre = album.Genre ?? "",
                     isCompilation = false,
                     created,
-                    song = (album.Songs ?? Enumerable.Empty<Song>()).Select(s => ConvertSongToJson(s)).ToList()
+                    song = (album.Songs ?? Enumerable.Empty<Song>()).Select(s => ConvertSongToJson(s, album.Id)).ToList()
                 }
             });
         }
@@ -183,7 +183,7 @@ public class SubsonicResponseBuilder
                     genre = "Playlist",
                     isCompilation = false,
                     created,
-                    song = tracks.Select(s => ConvertSongToJson(s)).ToList()
+                    song = tracks.Select(s => ConvertSongToJson(s, playlist.Id)).ToList()
                 }
             });
         }
@@ -277,9 +277,10 @@ public class SubsonicResponseBuilder
     /// <summary>
     /// Converts a Song domain model to Subsonic JSON format.
     /// </summary>
-    public Dictionary<string, object> ConvertSongToJson(Song song)
+    public Dictionary<string, object> ConvertSongToJson(Song song, string? parentAlbumId = null)
     {
         var (suffix, contentType, bitRate) = GetSuffixContentTypeAndBitrate(song);
+        var albumId = song.AlbumId ?? parentAlbumId ?? string.Empty;
 
         long size = 0;
         string? created = null;
@@ -317,12 +318,12 @@ public class SubsonicResponseBuilder
         var result = new Dictionary<string, object>
         {
             ["id"] = song.Id,
-            ["parent"] = song.AlbumId ?? "",
+            ["parent"] = albumId,
             ["isDir"] = false,
             ["title"] = song.Title,
             ["album"] = song.Album ?? "",
             ["artist"] = song.Artist ?? "",
-            ["albumId"] = song.AlbumId ?? "",
+            ["albumId"] = albumId,
             ["artistId"] = song.ArtistId ?? "",
             ["duration"] = song.Duration ?? 0,
             ["track"] = song.Track ?? 0,
@@ -335,10 +336,11 @@ public class SubsonicResponseBuilder
             ["isVideo"] = false
         };
 
-        // Only include coverArt if the song has a cover URL (avoids broken images for songs without covers)
-        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl))
+        // Prefer album cover for tracks so clients show the album artwork consistently.
+        var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
+        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(albumId))
         {
-            result["coverArt"] = song.Id;
+            result["coverArt"] = coverArtId;
         }
 
         if (created != null)
@@ -461,10 +463,11 @@ public class SubsonicResponseBuilder
             new XAttribute("isDir", "false")
         );
 
-        // Only include coverArt if the song has a cover URL (avoids broken images for songs without covers)
-        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl))
+        // Prefer album cover for tracks so clients show the album artwork consistently.
+        var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
+        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(albumId))
         {
-            songElement.Add(new XAttribute("coverArt", song.Id));
+            songElement.Add(new XAttribute("coverArt", coverArtId));
         }
 
         if (!string.IsNullOrEmpty(song.ArtistId))

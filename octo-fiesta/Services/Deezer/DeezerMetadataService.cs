@@ -133,7 +133,7 @@ public class DeezerMetadataService : IMusicMetadataService
 
     public async Task<Song?> GetSongAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "deezer") return null;
+        if (!string.Equals(externalProvider, "deezer", StringComparison.OrdinalIgnoreCase)) return null;
         
         var url = $"{BaseUrl}/track/{externalId}";
         var response = await _httpClient.GetAsync(url);
@@ -208,7 +208,7 @@ public class DeezerMetadataService : IMusicMetadataService
 
     public async Task<Album?> GetAlbumAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "deezer") return null;
+        if (!string.Equals(externalProvider, "deezer", StringComparison.OrdinalIgnoreCase)) return null;
         
         var url = $"{BaseUrl}/album/{externalId}";
         var response = await _httpClient.GetAsync(url);
@@ -250,7 +250,7 @@ public class DeezerMetadataService : IMusicMetadataService
 
     public async Task<Artist?> GetArtistAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "deezer") return null;
+        if (!string.Equals(externalProvider, "deezer", StringComparison.OrdinalIgnoreCase)) return null;
         
         var url = $"{BaseUrl}/artist/{externalId}";
         var response = await _httpClient.GetAsync(url);
@@ -267,7 +267,7 @@ public class DeezerMetadataService : IMusicMetadataService
 
     public async Task<List<Album>> GetArtistAlbumsAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "deezer") return new List<Album>();
+        if (!string.Equals(externalProvider, "deezer", StringComparison.OrdinalIgnoreCase)) return new List<Album>();
         
         var url = $"{BaseUrl}/artist/{externalId}/albums";
         var response = await _httpClient.GetAsync(url);
@@ -548,7 +548,7 @@ public class DeezerMetadataService : IMusicMetadataService
     
     public async Task<ExternalPlaylist?> GetPlaylistAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "deezer") return null;
+        if (!string.Equals(externalProvider, "deezer", StringComparison.OrdinalIgnoreCase)) return null;
         
         try
         {
@@ -572,7 +572,7 @@ public class DeezerMetadataService : IMusicMetadataService
     
     public async Task<List<Song>> GetPlaylistTracksAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "deezer") return new List<Song>();
+        if (!string.Equals(externalProvider, "deezer", StringComparison.OrdinalIgnoreCase)) return new List<Song>();
         
         try
         {

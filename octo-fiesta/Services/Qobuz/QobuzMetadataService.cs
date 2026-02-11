@@ -162,7 +162,7 @@ public class QobuzMetadataService : IMusicMetadataService
 
     public async Task<Song?> GetSongAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "qobuz") return null;
+        if (!string.Equals(externalProvider, "qobuz", StringComparison.OrdinalIgnoreCase)) return null;
         
         try
         {
@@ -188,7 +188,7 @@ public class QobuzMetadataService : IMusicMetadataService
 
     public async Task<Album?> GetAlbumAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "qobuz") return null;
+        if (!string.Equals(externalProvider, "qobuz", StringComparison.OrdinalIgnoreCase)) return null;
         
         try
         {
@@ -236,7 +236,7 @@ public class QobuzMetadataService : IMusicMetadataService
 
     public async Task<Artist?> GetArtistAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "qobuz") return null;
+        if (!string.Equals(externalProvider, "qobuz", StringComparison.OrdinalIgnoreCase)) return null;
         
         try
         {
@@ -262,7 +262,7 @@ public class QobuzMetadataService : IMusicMetadataService
 
     public async Task<List<Album>> GetArtistAlbumsAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "qobuz") return new List<Album>();
+        if (!string.Equals(externalProvider, "qobuz", StringComparison.OrdinalIgnoreCase)) return new List<Album>();
         
         try
         {
@@ -345,7 +345,7 @@ public class QobuzMetadataService : IMusicMetadataService
     
     public async Task<ExternalPlaylist?> GetPlaylistAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "qobuz") return null;
+        if (!string.Equals(externalProvider, "qobuz", StringComparison.OrdinalIgnoreCase)) return null;
         
         try
         {
@@ -371,7 +371,7 @@ public class QobuzMetadataService : IMusicMetadataService
     
     public async Task<List<Song>> GetPlaylistTracksAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "qobuz") return new List<Song>();
+        if (!string.Equals(externalProvider, "qobuz", StringComparison.OrdinalIgnoreCase)) return new List<Song>();
         
         try
         {

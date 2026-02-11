@@ -127,14 +127,14 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         var parts = id.Split('-');
         
         // Known types for the new format
-        var knownTypes = new HashSet<string> { "song", "album", "artist" };
+        var knownTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "song", "album", "artist" };
         
         // New format: ext-{provider}-{type}-{id} (e.g., ext-deezer-artist-259)
         // Only use new format if parts[2] is a known type
         if (parts.Length >= 4 && knownTypes.Contains(parts[2]))
         {
-            var provider = parts[1];
-            var type = parts[2];
+            var provider = parts[1].ToLowerInvariant();
+            var type = parts[2].ToLowerInvariant();
             var externalId = string.Join("-", parts.Skip(3)); // Handle IDs with dashes
             return (true, provider, type, externalId);
         }
@@ -143,7 +143,7 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         // This handles both 3-part IDs and 4+ part IDs where parts[2] is NOT a known type
         if (parts.Length >= 3)
         {
-            var provider = parts[1];
+            var provider = parts[1].ToLowerInvariant();
             var externalId = string.Join("-", parts.Skip(2)); // Everything after provider is the ID
             return (true, provider, "song", externalId);
         }

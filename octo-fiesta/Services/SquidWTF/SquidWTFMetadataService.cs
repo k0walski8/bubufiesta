@@ -5,6 +5,7 @@ using octo_fiesta.Models.Subsonic;
 using octo_fiesta.Models.SquidWTF;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
+using System.Collections.Concurrent;
 
 namespace octo_fiesta.Services.SquidWTF;
 
@@ -19,6 +20,7 @@ public class SquidWTFMetadataService : IMusicMetadataService
     private readonly SubsonicSettings _subsonicSettings;
     private readonly SquidWTFInstanceManager _instanceManager;
     private readonly ILogger<SquidWTFMetadataService> _logger;
+    private readonly ConcurrentDictionary<string, Song> _songCache = new(StringComparer.OrdinalIgnoreCase);
     
     // API endpoints
     private const string QobuzBaseUrl = "https://qobuz.squid.wtf";
@@ -91,14 +93,23 @@ public class SquidWTFMetadataService : IMusicMetadataService
     {
         try
         {
+            List<Artist> artists;
             if (IsQobuzSource)
             {
-                return await SearchArtistsQobuzAsync(query, limit);
+                artists = await SearchArtistsQobuzAsync(query, limit);
             }
             else
             {
-                return await SearchArtistsTidalAsync(query, limit);
+                artists = await SearchArtistsTidalAsync(query, limit);
             }
+
+            if (artists.Count > 0)
+            {
+                return artists;
+            }
+
+            // Fallback for APIs that omit direct artist results for some queries.
+            return await BuildArtistsFromSongAndAlbumSearchAsync(query, limit);
         }
         catch (Exception ex)
         {
@@ -146,18 +157,38 @@ public class SquidWTFMetadataService : IMusicMetadataService
 
     public async Task<Song?> GetSongAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "squidwtf") return null;
+        if (!IsProviderMatch(externalProvider, "squidwtf")) return null;
+
+        if (_songCache.TryGetValue(externalId, out var cachedSong))
+        {
+            return cachedSong;
+        }
         
         try
         {
+            Song? song;
             if (IsQobuzSource)
             {
-                return await GetSongQobuzAsync(externalId);
+                song = await GetSongQobuzAsync(externalId);
             }
             else
             {
-                return await GetSongTidalAsync(externalId);
+                song = await GetSongTidalAsync(externalId);
             }
+
+            if (song != null)
+            {
+                CacheSong(song);
+                return song;
+            }
+
+            // Fallback: if direct lookup fails, try resolving from track search by ID.
+            song = await ResolveSongFromSearchAsync(externalId);
+            if (song != null)
+            {
+                CacheSong(song);
+            }
+            return song;
         }
         catch (Exception ex)
         {
@@ -168,7 +199,7 @@ public class SquidWTFMetadataService : IMusicMetadataService
 
     public async Task<Album?> GetAlbumAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "squidwtf") return null;
+        if (!IsProviderMatch(externalProvider, "squidwtf")) return null;
         
         try
         {
@@ -190,7 +221,7 @@ public class SquidWTFMetadataService : IMusicMetadataService
 
     public async Task<Artist?> GetArtistAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "squidwtf") return null;
+        if (!IsProviderMatch(externalProvider, "squidwtf")) return null;
         
         try
         {
@@ -212,7 +243,7 @@ public class SquidWTFMetadataService : IMusicMetadataService
 
     public async Task<List<Album>> GetArtistAlbumsAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "squidwtf") return new List<Album>();
+        if (!IsProviderMatch(externalProvider, "squidwtf")) return new List<Album>();
         
         try
         {
@@ -253,7 +284,7 @@ public class SquidWTFMetadataService : IMusicMetadataService
 
     public async Task<ExternalPlaylist?> GetPlaylistAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "squidwtf") return null;
+        if (!IsProviderMatch(externalProvider, "squidwtf")) return null;
         
         try
         {
@@ -274,7 +305,7 @@ public class SquidWTFMetadataService : IMusicMetadataService
 
     public async Task<List<Song>> GetPlaylistTracksAsync(string externalProvider, string externalId)
     {
-        if (externalProvider != "squidwtf") return new List<Song>();
+        if (!IsProviderMatch(externalProvider, "squidwtf")) return new List<Song>();
         
         try
         {
@@ -316,6 +347,8 @@ public class SquidWTFMetadataService : IMusicMetadataService
                 songs.Add(song);
             }
         }
+
+        CacheSongs(songs);
         
         return songs;
     }
@@ -407,6 +440,8 @@ public class SquidWTFMetadataService : IMusicMetadataService
                 }
             }
         }
+
+        CacheSongs(album.Songs);
         
         return album;
     }
@@ -490,6 +525,8 @@ public class SquidWTFMetadataService : IMusicMetadataService
                 songs.Add(song);
             }
         }
+
+        CacheSongs(songs);
         
         return songs;
     }
@@ -516,9 +553,29 @@ public class SquidWTFMetadataService : IMusicMetadataService
         if (response == null) return new List<Artist>();
         
         var dataResponse = JsonSerializer.Deserialize<TidalNestedSearchResponse>(response);
-        if (dataResponse?.Data?.Artists?.Items == null) return new List<Artist>();
+        if (dataResponse?.Data?.Artists?.Items != null)
+        {
+            return dataResponse.Data.Artists.Items
+                .Take(limit)
+                .Select(MapTidalArtistToArtist)
+                .ToList();
+        }
+
+        // Fallback for older/different response shape with data.items.
+        var wrappedResponse = JsonSerializer.Deserialize<TidalDataResponse<TidalArtist>>(response);
+        if (wrappedResponse?.Data?.Items != null)
+        {
+            return wrappedResponse.Data.Items
+                .Take(limit)
+                .Select(MapTidalArtistToArtist)
+                .ToList();
+        }
+
+        // Fallback for legacy response shape with top-level artists array.
+        var legacyResponse = JsonSerializer.Deserialize<TidalSearchResponse>(response);
+        if (legacyResponse?.Artists == null) return new List<Artist>();
         
-        return dataResponse.Data.Artists.Items
+        return legacyResponse.Artists
             .Take(limit)
             .Select(MapTidalArtistToArtist)
             .ToList();
@@ -569,9 +626,19 @@ public class SquidWTFMetadataService : IMusicMetadataService
         if (response == null) return null;
         
         var trackInfoWrapper = JsonSerializer.Deserialize<TidalTrackInfoResponseWrapper>(response);
-        if (trackInfoWrapper?.Data == null) return null;
-        
-        return MapTidalTrackInfoToSong(trackInfoWrapper.Data);
+        if (trackInfoWrapper?.Data != null)
+        {
+            return MapTidalTrackInfoToSong(trackInfoWrapper.Data);
+        }
+
+        // Fallback for direct (non-wrapped) response payloads.
+        var directTrackInfo = JsonSerializer.Deserialize<TidalTrackInfoResponse>(response);
+        if (directTrackInfo?.Id > 0)
+        {
+            return MapTidalTrackInfoToSong(directTrackInfo);
+        }
+
+        return null;
     }
 
     private async Task<Album?> GetAlbumTidalAsync(string albumId)
@@ -616,6 +683,8 @@ public class SquidWTFMetadataService : IMusicMetadataService
                 }
             }
         }
+
+        CacheSongs(album.Songs);
         
         return album;
     }
@@ -721,6 +790,8 @@ public class SquidWTFMetadataService : IMusicMetadataService
                     }
                 }
             }
+
+            CacheSongs(songs);
             
             return songs;
         }
@@ -1117,6 +1188,120 @@ public class SquidWTFMetadataService : IMusicMetadataService
             ExplicitFilter.CleanOnly => song.ExplicitContentLyrics != 1,
             _ => true
         };
+    }
+
+    private static bool IsProviderMatch(string? actualProvider, string expectedProvider)
+    {
+        return string.Equals(actualProvider, expectedProvider, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<Song?> ResolveSongFromSearchAsync(string externalId)
+    {
+        var candidates = IsQobuzSource
+            ? await SearchSongsQobuzAsync(externalId, 25)
+            : await SearchSongsTidalAsync(externalId, 25);
+
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        var exact = candidates.FirstOrDefault(song =>
+            string.Equals(song.ExternalId, externalId, StringComparison.OrdinalIgnoreCase));
+
+        return exact ?? candidates[0];
+    }
+
+    private void CacheSongs(IEnumerable<Song> songs)
+    {
+        foreach (var song in songs)
+        {
+            CacheSong(song);
+        }
+    }
+
+    private void CacheSong(Song song)
+    {
+        if (string.IsNullOrWhiteSpace(song.ExternalId))
+        {
+            return;
+        }
+
+        _songCache[song.ExternalId] = song;
+    }
+
+    private async Task<List<Artist>> BuildArtistsFromSongAndAlbumSearchAsync(string query, int limit)
+    {
+        var songsTask = IsQobuzSource
+            ? SearchSongsQobuzAsync(query, Math.Max(limit * 3, limit))
+            : SearchSongsTidalAsync(query, Math.Max(limit * 3, limit));
+        var albumsTask = IsQobuzSource
+            ? SearchAlbumsQobuzAsync(query, Math.Max(limit * 3, limit))
+            : SearchAlbumsTidalAsync(query, Math.Max(limit * 3, limit));
+
+        await Task.WhenAll(songsTask, albumsTask);
+
+        var songs = await songsTask;
+        var albums = await albumsTask;
+
+        var artistsById = new Dictionary<string, Artist>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var album in albums)
+        {
+            if (string.IsNullOrWhiteSpace(album.ArtistId) || string.IsNullOrWhiteSpace(album.Artist))
+            {
+                continue;
+            }
+
+            if (!artistsById.ContainsKey(album.ArtistId))
+            {
+                artistsById[album.ArtistId] = new Artist
+                {
+                    Id = album.ArtistId,
+                    Name = album.Artist,
+                    IsLocal = false,
+                    ExternalProvider = "squidwtf",
+                    ExternalId = TryExtractExternalIdFromTypedId(album.ArtistId, "artist")
+                };
+            }
+
+            var currentAlbumCount = artistsById[album.ArtistId].AlbumCount ?? 0;
+            artistsById[album.ArtistId].AlbumCount = currentAlbumCount + 1;
+        }
+
+        foreach (var song in songs)
+        {
+            if (string.IsNullOrWhiteSpace(song.ArtistId) || string.IsNullOrWhiteSpace(song.Artist))
+            {
+                continue;
+            }
+
+            if (!artistsById.ContainsKey(song.ArtistId))
+            {
+                artistsById[song.ArtistId] = new Artist
+                {
+                    Id = song.ArtistId,
+                    Name = song.Artist,
+                    AlbumCount = null,
+                    IsLocal = false,
+                    ExternalProvider = "squidwtf",
+                    ExternalId = TryExtractExternalIdFromTypedId(song.ArtistId, "artist")
+                };
+            }
+        }
+
+        return artistsById.Values
+            .Take(limit)
+            .ToList();
+    }
+
+    private static string? TryExtractExternalIdFromTypedId(string typedId, string type)
+    {
+        var parts = typedId.Split('-', 4, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 4) return null;
+        if (!parts[0].Equals("ext", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!parts[2].Equals(type, StringComparison.OrdinalIgnoreCase)) return null;
+        return parts[3];
     }
 
     #endregion
