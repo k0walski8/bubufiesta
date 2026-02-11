@@ -161,6 +161,17 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         }
 
         var normalized = id.Trim();
+        if (normalized.Contains('%'))
+        {
+            try
+            {
+                normalized = Uri.UnescapeDataString(normalized);
+            }
+            catch (UriFormatException)
+            {
+                // Keep original value if decoding fails.
+            }
+        }
         var schemeSeparatorIndex = normalized.IndexOf("://", StringComparison.Ordinal);
         if (schemeSeparatorIndex < 0)
         {

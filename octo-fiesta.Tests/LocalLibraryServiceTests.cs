@@ -211,6 +211,7 @@ public class LocalLibraryServiceTests : IDisposable
     [InlineData("ext-SquidWTF-Song-345949499", true, "squidwtf", "345949499")] // Mixed case provider/type
     [InlineData("track://ext-squidwtf-song-345949499", true, "squidwtf", "345949499")] // URI-wrapped format
     [InlineData("track://ext-squidwtf-song-345949499?source=ma", true, "squidwtf", "345949499")] // URI-wrapped format with query
+    [InlineData("track%3A%2F%2Fext-squidwtf-song-345949499", true, "squidwtf", "345949499")] // URL-encoded URI format
     [InlineData("album://ext-squidwtf-album-br7ad0ufcms0b", true, "squidwtf", "br7ad0ufcms0b")] // URI-wrapped album format
     [InlineData("track://opensubsonic--zvFBBaob/ext-squidwtf-song-345949499", true, "squidwtf", "345949499")] // URI with provider scope
     [InlineData("123456", false, null, null)]
@@ -236,6 +237,7 @@ public class LocalLibraryServiceTests : IDisposable
     [InlineData("ext-SquidWTF-Song-345949499", true, "squidwtf", "song", "345949499")] // Mixed case provider/type
     [InlineData("track://ext-squidwtf-song-345949499", true, "squidwtf", "song", "345949499")] // URI-wrapped format
     [InlineData("track://ext-squidwtf-song-345949499?source=ma", true, "squidwtf", "song", "345949499")] // URI-wrapped format with query
+    [InlineData("track%3A%2F%2Fext-squidwtf-song-345949499", true, "squidwtf", "song", "345949499")] // URL-encoded URI format
     [InlineData("album://ext-squidwtf-album-br7ad0ufcms0b", true, "squidwtf", "album", "br7ad0ufcms0b")] // URI-wrapped album format
     [InlineData("track://opensubsonic--zvFBBaob/ext-squidwtf-song-345949499", true, "squidwtf", "song", "345949499")] // URI with provider scope
     [InlineData("ext-deezer-123", true, "deezer", "song", "123")]  // Legacy format defaults to song

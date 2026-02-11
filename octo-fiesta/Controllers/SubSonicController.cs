@@ -530,6 +530,50 @@ public class SubsonicController : ControllerBase
     }
 
     /// <summary>
+    /// Returns album info metadata. Handles external IDs to support OpenSubsonic clients.
+    /// </summary>
+    [HttpGet, HttpPost]
+    [Route("rest/getAlbumInfo2")]
+    [Route("rest/getAlbumInfo2.view")]
+    public async Task<IActionResult> GetAlbumInfo2()
+    {
+        return await GetAlbumInfoInternal("rest/getAlbumInfo2", "albumInfo2");
+    }
+
+    /// <summary>
+    /// Returns legacy album info metadata. Handles external IDs to support OpenSubsonic clients.
+    /// </summary>
+    [HttpGet, HttpPost]
+    [Route("rest/getAlbumInfo")]
+    [Route("rest/getAlbumInfo.view")]
+    public async Task<IActionResult> GetAlbumInfo()
+    {
+        return await GetAlbumInfoInternal("rest/getAlbumInfo", "albumInfo");
+    }
+
+    /// <summary>
+    /// Returns artist info metadata. Handles external IDs to support OpenSubsonic clients.
+    /// </summary>
+    [HttpGet, HttpPost]
+    [Route("rest/getArtistInfo2")]
+    [Route("rest/getArtistInfo2.view")]
+    public async Task<IActionResult> GetArtistInfo2()
+    {
+        return await GetArtistInfoInternal("rest/getArtistInfo2", "artistInfo2");
+    }
+
+    /// <summary>
+    /// Returns legacy artist info metadata. Handles external IDs to support OpenSubsonic clients.
+    /// </summary>
+    [HttpGet, HttpPost]
+    [Route("rest/getArtistInfo")]
+    [Route("rest/getArtistInfo.view")]
+    public async Task<IActionResult> GetArtistInfo()
+    {
+        return await GetArtistInfoInternal("rest/getArtistInfo", "artistInfo");
+    }
+
+    /// <summary>
     /// Proxies external covers. Uses type from ID to determine which API to call.
     /// Format: ext-{provider}-{type}-{id} (e.g., ext-deezer-artist-259, ext-deezer-album-96126)
     /// </summary>
@@ -650,6 +694,143 @@ public class SubsonicController : ControllerBase
     }
 
     #region Helper Methods
+
+    private async Task<IActionResult> GetAlbumInfoInternal(string upstreamEndpoint, string responseElement)
+    {
+        var parameters = await ExtractAllParameters();
+        var format = parameters.GetValueOrDefault("f", "xml");
+        var id = GetInfoTargetId(parameters);
+
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return _responseBuilder.CreateError(format, 10, "Missing id parameter");
+        }
+
+        var (isExternal, provider, externalId) = _localLibraryService.ParseSongId(id);
+        if (!isExternal)
+        {
+            var result = await _proxyService.RelayAsync(upstreamEndpoint, parameters);
+            var contentType = result.ContentType ?? $"application/{format}";
+            return File(result.Body, contentType);
+        }
+
+        var album = await _metadataService.GetAlbumAsync(provider!, externalId!);
+        if (album == null)
+        {
+            return _responseBuilder.CreateError(format, 70, "Album not found");
+        }
+
+        var largeImage = album.CoverArtUrlLarge ?? album.CoverArtUrl;
+        return CreateInfoResponse(format, responseElement, null, album.CoverArtUrl, album.CoverArtUrl, largeImage);
+    }
+
+    private async Task<IActionResult> GetArtistInfoInternal(string upstreamEndpoint, string responseElement)
+    {
+        var parameters = await ExtractAllParameters();
+        var format = parameters.GetValueOrDefault("f", "xml");
+        var id = GetInfoTargetId(parameters);
+
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return _responseBuilder.CreateError(format, 10, "Missing id parameter");
+        }
+
+        var (isExternal, provider, externalId) = _localLibraryService.ParseSongId(id);
+        if (!isExternal)
+        {
+            var result = await _proxyService.RelayAsync(upstreamEndpoint, parameters);
+            var contentType = result.ContentType ?? $"application/{format}";
+            return File(result.Body, contentType);
+        }
+
+        var artist = await _metadataService.GetArtistAsync(provider!, externalId!);
+        if (artist == null)
+        {
+            return _responseBuilder.CreateError(format, 70, "Artist not found");
+        }
+
+        return CreateInfoResponse(format, responseElement, null, artist.ImageUrl, artist.ImageUrl, artist.ImageUrl);
+    }
+
+    private static string GetInfoTargetId(Dictionary<string, string> parameters)
+    {
+        var id = parameters.GetValueOrDefault("id", "");
+        if (!string.IsNullOrWhiteSpace(id))
+        {
+            return id;
+        }
+
+        return parameters.GetValueOrDefault("aid", "");
+    }
+
+    private IActionResult CreateInfoResponse(
+        string format,
+        string elementName,
+        string? notes,
+        string? smallImageUrl,
+        string? mediumImageUrl,
+        string? largeImageUrl)
+    {
+        if (format == "json")
+        {
+            var info = new Dictionary<string, object>();
+            if (!string.IsNullOrWhiteSpace(notes))
+            {
+                info["notes"] = notes;
+            }
+            if (!string.IsNullOrWhiteSpace(smallImageUrl))
+            {
+                info["smallImageUrl"] = smallImageUrl!;
+            }
+            if (!string.IsNullOrWhiteSpace(mediumImageUrl))
+            {
+                info["mediumImageUrl"] = mediumImageUrl!;
+            }
+            if (!string.IsNullOrWhiteSpace(largeImageUrl))
+            {
+                info["largeImageUrl"] = largeImageUrl!;
+            }
+
+            var response = new Dictionary<string, object>
+            {
+                ["status"] = "ok",
+                ["version"] = "1.16.1",
+                [elementName] = info
+            };
+
+            return _responseBuilder.CreateJsonResponse(response);
+        }
+
+        var ns = XNamespace.Get("http://subsonic.org/restapi");
+        var infoElement = new XElement(ns + elementName);
+
+        if (!string.IsNullOrWhiteSpace(notes))
+        {
+            infoElement.Add(new XElement(ns + "notes", notes));
+        }
+        if (!string.IsNullOrWhiteSpace(smallImageUrl))
+        {
+            infoElement.Add(new XElement(ns + "smallImageUrl", smallImageUrl));
+        }
+        if (!string.IsNullOrWhiteSpace(mediumImageUrl))
+        {
+            infoElement.Add(new XElement(ns + "mediumImageUrl", mediumImageUrl));
+        }
+        if (!string.IsNullOrWhiteSpace(largeImageUrl))
+        {
+            infoElement.Add(new XElement(ns + "largeImageUrl", largeImageUrl));
+        }
+
+        var doc = new XDocument(
+            new XElement(ns + "subsonic-response",
+                new XAttribute("status", "ok"),
+                new XAttribute("version", "1.16.1"),
+                infoElement
+            )
+        );
+
+        return Content(doc.ToString(), "application/xml; charset=utf-8");
+    }
 
     private IActionResult MergeSearchResults(
         (byte[]? Body, string? ContentType, bool Success) subsonicResult,
