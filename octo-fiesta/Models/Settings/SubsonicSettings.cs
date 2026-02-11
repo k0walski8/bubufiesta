@@ -142,4 +142,11 @@ public class SubsonicSettings
     /// the track will be re-downloaded in FLAC
     /// </summary>
     public bool AutoUpgradeQuality { get; set; } = false;
+    
+    /// <summary>
+    /// Download lyrics for tracks when available (default: true)
+    /// Environment variable: DOWNLOAD_LYRICS
+    /// Lyrics are embedded in audio tags and saved as a .lrc sidecar file
+    /// </summary>
+    public bool DownloadLyrics { get; set; } = true;
 }

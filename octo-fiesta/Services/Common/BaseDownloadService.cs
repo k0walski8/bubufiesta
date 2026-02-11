@@ -8,6 +8,8 @@ using octo_fiesta.Services.Subsonic;
 using TagLib;
 using IOFile = System.IO.File;
 using System.Collections.Concurrent;
+using System.Net;
+using System.Text.Json;
 
 namespace octo_fiesta.Services.Common;
 
@@ -38,6 +40,7 @@ public abstract class BaseDownloadService : IDownloadService
     private static readonly TimeSpan MetadataCacheTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan MetadataCacheNegativeTtl = TimeSpan.FromMinutes(1);
     private readonly IHttpClientFactory _httpClientFactory;
+    private const string LyricsApiBaseUrl = "https://lrclib.net/api";
     private static readonly TimeSpan MetadataCacheCleanupInterval = TimeSpan.FromMinutes(5);
     private readonly object _metadataCacheCleanupLock = new();
     private DateTime _metadataCacheNextCleanupUtc = DateTime.UtcNow.Add(MetadataCacheCleanupInterval);
@@ -596,6 +599,24 @@ public abstract class BaseDownloadService : IDownloadService
             if (comments.Count > 0)
                 tagFile.Tag.Comment = string.Join(" | ", comments);
 
+            LyricsPayload? lyricsPayload = null;
+            if (SubsonicSettings.DownloadLyrics)
+            {
+                try
+                {
+                    lyricsPayload = await DownloadLyricsAsync(song, cancellationToken);
+                    if (lyricsPayload != null && !string.IsNullOrWhiteSpace(lyricsPayload.PlainLyrics))
+                    {
+                        tagFile.Tag.Lyrics = lyricsPayload.PlainLyrics;
+                        Logger.LogInformation("Lyrics embedded for: {Title} - {Artist}", song.Title, song.Artist);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to download lyrics for: {Title} - {Artist}", song.Title, song.Artist);
+                }
+            }
+
             // Download and embed cover art
             var coverUrl = song.CoverArtUrlLarge ?? song.CoverArtUrl;
             if (!string.IsNullOrEmpty(coverUrl))
@@ -666,6 +687,12 @@ public abstract class BaseDownloadService : IDownloadService
             }
 
             tagFile.Save();
+
+            if (lyricsPayload != null)
+            {
+                await SaveLyricsSidecarAsync(filePath, lyricsPayload, cancellationToken);
+            }
+
             Logger.LogInformation("Metadata written successfully to: {Path}", filePath);
         }
         catch (Exception ex)
@@ -692,6 +719,225 @@ public abstract class BaseDownloadService : IDownloadService
             return null;
         }
     }
+
+    private async Task<LyricsPayload?> DownloadLyricsAsync(Song song, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(song.Title) || string.IsNullOrWhiteSpace(song.Artist))
+        {
+            return null;
+        }
+
+        var queryAttempts = BuildLyricsQueryAttempts(song);
+        if (queryAttempts.Count == 0)
+        {
+            return null;
+        }
+
+        using var client = _httpClientFactory.CreateClient("LyricsClient");
+        foreach (var query in queryAttempts)
+        {
+            try
+            {
+                using var response = await client.GetAsync(query, cancellationToken);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    continue;
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.LogDebug("Lyrics lookup failed with status {StatusCode} for query: {Query}",
+                        response.StatusCode, query);
+                    continue;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var lyrics = ParseLyricsResponse(body);
+                if (lyrics != null)
+                {
+                    return lyrics;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Lyrics request failed for query: {Query}", query);
+            }
+        }
+
+        return null;
+    }
+
+    private static List<string> BuildLyricsQueryAttempts(Song song)
+    {
+        var attempts = new List<string>();
+        var trackName = Uri.EscapeDataString(song.Title.Trim());
+        var artistName = Uri.EscapeDataString(song.Artist.Trim());
+        var albumName = string.IsNullOrWhiteSpace(song.Album)
+            ? null
+            : Uri.EscapeDataString(song.Album.Trim());
+        var duration = song.Duration.HasValue ? song.Duration.Value.ToString() : null;
+
+        // Most precise lookup first.
+        var precise = $"{LyricsApiBaseUrl}/get?track_name={trackName}&artist_name={artistName}";
+        if (!string.IsNullOrEmpty(albumName))
+        {
+            precise += $"&album_name={albumName}";
+        }
+        if (!string.IsNullOrEmpty(duration))
+        {
+            precise += $"&duration={duration}";
+        }
+        attempts.Add(precise);
+
+        // Fallback without strict album/duration matching.
+        attempts.Add($"{LyricsApiBaseUrl}/get?track_name={trackName}&artist_name={artistName}");
+
+        // Broad fallback to search endpoint when exact match fails.
+        attempts.Add($"{LyricsApiBaseUrl}/search?track_name={trackName}&artist_name={artistName}");
+
+        return attempts;
+    }
+
+    private static LyricsPayload? ParseLyricsResponse(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+            {
+                var lyrics = ParseLyricsItem(item);
+                if (lyrics != null)
+                {
+                    return lyrics;
+                }
+            }
+
+            return null;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            return ParseLyricsItem(root);
+        }
+
+        return null;
+    }
+
+    private static LyricsPayload? ParseLyricsItem(JsonElement item)
+    {
+        var isInstrumental = item.TryGetProperty("instrumental", out var instrumentalValue) &&
+            instrumentalValue.ValueKind == JsonValueKind.True;
+        if (isInstrumental)
+        {
+            return null;
+        }
+
+        var plainLyrics = GetJsonString(item, "plainLyrics");
+        var syncedLyrics = GetJsonString(item, "syncedLyrics");
+
+        if (string.IsNullOrWhiteSpace(plainLyrics) && string.IsNullOrWhiteSpace(syncedLyrics))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(plainLyrics) && !string.IsNullOrWhiteSpace(syncedLyrics))
+        {
+            plainLyrics = ConvertSyncedToPlainLyrics(syncedLyrics);
+        }
+
+        if (string.IsNullOrWhiteSpace(plainLyrics))
+        {
+            return null;
+        }
+
+        return new LyricsPayload(plainLyrics, syncedLyrics);
+    }
+
+    private static string? GetJsonString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString();
+        }
+
+        return value.ToString();
+    }
+
+    private static string ConvertSyncedToPlainLyrics(string syncedLyrics)
+    {
+        if (string.IsNullOrWhiteSpace(syncedLyrics))
+        {
+            return string.Empty;
+        }
+
+        var normalized = syncedLyrics.Replace("\r", "");
+        var lines = normalized.Split('\n');
+        var output = new List<string>(lines.Length);
+
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            while (line.StartsWith("[", StringComparison.Ordinal))
+            {
+                var closingBracket = line.IndexOf(']');
+                if (closingBracket <= 0)
+                {
+                    break;
+                }
+
+                line = line[(closingBracket + 1)..].Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                output.Add(line);
+            }
+        }
+
+        return string.Join(Environment.NewLine, output);
+    }
+
+    private async Task SaveLyricsSidecarAsync(string audioFilePath, LyricsPayload lyricsPayload, CancellationToken cancellationToken)
+    {
+        var lrcPath = Path.ChangeExtension(audioFilePath, ".lrc");
+        if (string.IsNullOrWhiteSpace(lrcPath))
+        {
+            return;
+        }
+
+        var sidecarContent = !string.IsNullOrWhiteSpace(lyricsPayload.SyncedLyrics)
+            ? lyricsPayload.SyncedLyrics
+            : lyricsPayload.PlainLyrics;
+
+        if (string.IsNullOrWhiteSpace(sidecarContent))
+        {
+            return;
+        }
+
+        try
+        {
+            await IOFile.WriteAllTextAsync(lrcPath, sidecarContent, cancellationToken);
+            Logger.LogInformation("Lyrics sidecar saved: {Path}", lrcPath);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to save lyrics sidecar: {Path}", lrcPath);
+        }
+    }
+
+    private sealed record LyricsPayload(string PlainLyrics, string? SyncedLyrics);
 
     #endregion
 
