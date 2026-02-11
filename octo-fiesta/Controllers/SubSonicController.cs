@@ -537,7 +537,9 @@ public class SubsonicController : ControllerBase
     [Route("rest/getAlbumInfo2.view")]
     public async Task<IActionResult> GetAlbumInfo2()
     {
-        return await GetAlbumInfoInternal("rest/getAlbumInfo2", "albumInfo2");
+        // OpenSubsonic returns "albumInfo" for both getAlbumInfo and getAlbumInfo2.
+        // Some clients (including Music Assistant) strictly expect that key name.
+        return await GetAlbumInfoInternal("rest/getAlbumInfo2", "albumInfo");
     }
 
     /// <summary>
