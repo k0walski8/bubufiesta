@@ -410,4 +410,49 @@ public class SubsonicResponseBuilderTests
         // Assert
         Assert.Equal("ext-squidwtf-album-111", converted.Attribute("coverArt")?.Value);
     }
+
+    [Fact]
+    public void ConvertSongToJson_WithoutAlbumOrCover_UsesSongIdAsCoverArtId()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-squidwtf-song-999",
+            Title = "Track With Unknown Album",
+            AlbumId = null,
+            CoverArtUrl = null,
+            IsLocal = false,
+            ExternalProvider = "squidwtf",
+            ExternalId = "999"
+        };
+
+        // Act
+        var converted = _builder.ConvertSongToJson(song);
+
+        // Assert
+        Assert.Equal("ext-squidwtf-song-999", converted["coverArt"]);
+    }
+
+    [Fact]
+    public void ConvertSongToXml_WithoutAlbumOrCover_UsesSongIdAsCoverArtId()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-squidwtf-song-999",
+            Title = "Track With Unknown Album",
+            AlbumId = null,
+            CoverArtUrl = null,
+            IsLocal = false,
+            ExternalProvider = "squidwtf",
+            ExternalId = "999"
+        };
+        var ns = XNamespace.Get("http://subsonic.org/restapi");
+
+        // Act
+        var converted = _builder.ConvertSongToXml(song, ns);
+
+        // Assert
+        Assert.Equal("ext-squidwtf-song-999", converted.Attribute("coverArt")?.Value);
+    }
 }

@@ -604,23 +604,19 @@ public class SubsonicController : ControllerBase
                 {
                     return NotFound();
                 }
-                
-                // Download and return the cover image
-                var imageResponse = await new HttpClient().GetAsync(playlist.CoverUrl);
-                if (!imageResponse.IsSuccessStatusCode)
+
+                var playlistCover = await TryFetchCoverArtAsync(playlist.CoverUrl, HttpContext.RequestAborted);
+                if (playlistCover != null)
                 {
-                    return NotFound();
+                    return playlistCover;
                 }
-                
-                var imageBytes = await imageResponse.Content.ReadAsByteArrayAsync();
-                var contentType = imageResponse.Content.Headers.ContentType?.ToString() ?? "image/jpeg";
-                return File(imageBytes, contentType);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting playlist cover art for {Id}", id);
-                return NotFound();
             }
+
+            return NotFound();
         }
 
         var (isExternal, coverProvider, type, coverExternalId) = _localLibraryService.ParseExternalId(id);
@@ -639,60 +635,152 @@ public class SubsonicController : ControllerBase
             }
         }
 
-        string? coverUrl = null;
-        
-        // Use type to determine which API to call first
-        switch (type)
+        var coverType = string.IsNullOrWhiteSpace(type) ? "song" : type!;
+        var coverUrl = await ResolveCoverArtUrlAsync(coverProvider!, coverType, coverExternalId!);
+        if (!string.IsNullOrWhiteSpace(coverUrl))
         {
-            case "artist":
-                var artist = await _metadataService.GetArtistAsync(coverProvider!, coverExternalId!);
-                if (artist?.ImageUrl != null)
-                {
-                    coverUrl = artist.ImageUrl;
-                }
-                break;
-                
-            case "album":
-                var album = await _metadataService.GetAlbumAsync(coverProvider!, coverExternalId!);
-                if (album?.CoverArtUrl != null)
-                {
-                    coverUrl = album.CoverArtUrl;
-                }
-                break;
-                
-            case "song":
-            default:
-                // For songs, try to get from song first, then album
-                var song = await _metadataService.GetSongAsync(coverProvider!, coverExternalId!);
-                if (song?.CoverArtUrl != null)
-                {
-                    coverUrl = song.CoverArtUrl;
-                }
-                else
-                {
-                    // Fallback: try album with same ID (legacy behavior)
-                    var albumFallback = await _metadataService.GetAlbumAsync(coverProvider!, coverExternalId!);
-                    if (albumFallback?.CoverArtUrl != null)
-                    {
-                        coverUrl = albumFallback.CoverArtUrl;
-                    }
-                }
-                break;
-        }
-        
-        if (coverUrl != null)
-        {
-            using var httpClient = new HttpClient();
-            var response = await httpClient.GetAsync(coverUrl);
-            if (response.IsSuccessStatusCode)
+            var result = await TryFetchCoverArtAsync(coverUrl, HttpContext.RequestAborted);
+            if (result != null)
             {
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
-                var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/jpeg";
-                return File(imageBytes, contentType);
+                return result;
             }
         }
 
         return NotFound();
+    }
+
+    private async Task<string?> ResolveCoverArtUrlAsync(string provider, string type, string externalId)
+    {
+        switch (type.ToLowerInvariant())
+        {
+            case "artist":
+            {
+                var artist = await _metadataService.GetArtistAsync(provider, externalId);
+                return artist?.ImageUrl;
+            }
+            case "album":
+            {
+                var album = await _metadataService.GetAlbumAsync(provider, externalId);
+                return album?.CoverArtUrlLarge ?? album?.CoverArtUrl;
+            }
+            case "song":
+            default:
+            {
+                var song = await _metadataService.GetSongAsync(provider, externalId);
+                if (!string.IsNullOrWhiteSpace(song?.CoverArtUrlLarge))
+                {
+                    return song.CoverArtUrlLarge;
+                }
+                if (!string.IsNullOrWhiteSpace(song?.CoverArtUrl))
+                {
+                    return song.CoverArtUrl;
+                }
+
+                // Preferred fallback: use the song's album ID when present.
+                if (!string.IsNullOrWhiteSpace(song?.AlbumId))
+                {
+                    var (isExternalAlbum, albumProvider, albumType, albumExternalId) =
+                        _localLibraryService.ParseExternalId(song.AlbumId);
+                    if (isExternalAlbum &&
+                        string.Equals(albumType, "album", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(albumProvider) &&
+                        !string.IsNullOrWhiteSpace(albumExternalId))
+                    {
+                        var albumFromSong = await _metadataService.GetAlbumAsync(albumProvider, albumExternalId);
+                        if (!string.IsNullOrWhiteSpace(albumFromSong?.CoverArtUrlLarge))
+                        {
+                            return albumFromSong.CoverArtUrlLarge;
+                        }
+                        if (!string.IsNullOrWhiteSpace(albumFromSong?.CoverArtUrl))
+                        {
+                            return albumFromSong.CoverArtUrl;
+                        }
+                    }
+                }
+
+                // Legacy fallback for old IDs where song and album IDs may align.
+                var albumFallback = await _metadataService.GetAlbumAsync(provider, externalId);
+                return albumFallback?.CoverArtUrlLarge ?? albumFallback?.CoverArtUrl;
+            }
+        }
+    }
+
+    private async Task<IActionResult?> TryFetchCoverArtAsync(string coverUrl, CancellationToken cancellationToken)
+    {
+        using var httpClient = new HttpClient();
+        using var response = await httpClient.GetAsync(coverUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        var imageBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        if (imageBytes.Length == 0)
+        {
+            return null;
+        }
+
+        var contentTypeHeader = response.Content.Headers.ContentType?.MediaType;
+        var contentType = ResolveImageContentType(imageBytes, contentTypeHeader, coverUrl);
+        return File(imageBytes, contentType);
+    }
+
+    private static string ResolveImageContentType(byte[] imageBytes, string? contentTypeHeader, string? sourceUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(contentTypeHeader))
+        {
+            var normalized = contentTypeHeader.Trim();
+            if (normalized.StartsWith("image/", StringComparison.OrdinalIgnoreCase) &&
+                !normalized.Equals("image/*", StringComparison.OrdinalIgnoreCase))
+            {
+                return normalized;
+            }
+        }
+
+        if (imageBytes.Length >= 12)
+        {
+            // GIF87a/GIF89a
+            if (imageBytes[0] == 0x47 && imageBytes[1] == 0x49 && imageBytes[2] == 0x46)
+            {
+                return "image/gif";
+            }
+
+            // PNG
+            if (imageBytes[0] == 0x89 && imageBytes[1] == 0x50 && imageBytes[2] == 0x4E && imageBytes[3] == 0x47)
+            {
+                return "image/png";
+            }
+
+            // JPEG
+            if (imageBytes[0] == 0xFF && imageBytes[1] == 0xD8 && imageBytes[2] == 0xFF)
+            {
+                return "image/jpeg";
+            }
+
+            // WEBP container: RIFF....WEBP
+            if (imageBytes[0] == 0x52 && imageBytes[1] == 0x49 && imageBytes[2] == 0x46 && imageBytes[3] == 0x46 &&
+                imageBytes[8] == 0x57 && imageBytes[9] == 0x45 && imageBytes[10] == 0x42 && imageBytes[11] == 0x50)
+            {
+                return "image/webp";
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(sourceUrl) &&
+            Uri.TryCreate(sourceUrl, UriKind.Absolute, out var uri))
+        {
+            var ext = Path.GetExtension(uri.AbsolutePath).ToLowerInvariant();
+            return ext switch
+            {
+                ".gif" => "image/gif",
+                ".png" => "image/png",
+                ".webp" => "image/webp",
+                ".avif" => "image/avif",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                _ => "image/jpeg"
+            };
+        }
+
+        return "image/jpeg";
     }
 
     #region Helper Methods

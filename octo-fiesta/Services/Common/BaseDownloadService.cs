@@ -659,6 +659,20 @@ public abstract class BaseDownloadService : IDownloadService
                         return "image/gif";
                     }
 
+                    // WEBP signature: "RIFF"...."WEBP"
+                    if (data.Length >= 12 &&
+                        data[0] == 0x52 && // 'R'
+                        data[1] == 0x49 && // 'I'
+                        data[2] == 0x46 && // 'F'
+                        data[3] == 0x46 && // 'F'
+                        data[8] == 0x57 && // 'W'
+                        data[9] == 0x45 && // 'E'
+                        data[10] == 0x42 && // 'B'
+                        data[11] == 0x50)  // 'P'
+                    {
+                        return "image/webp";
+                    }
+
                     // Fallback to JPEG to preserve previous behavior.
                     return "image/jpeg";
                 }
