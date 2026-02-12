@@ -450,4 +450,51 @@ public class SubsonicResponseBuilderTests
         // Assert
         Assert.Equal("ext-qobuz-album-1", converted["coverArt"]);
     }
+
+    [Fact]
+    public void ConvertSongToJson_IncludesCoverArtForResolvableExternalSongWithoutAlbumMetadata()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-squidwtf-song-345949499",
+            Title = "External Search Track",
+            AlbumId = null,
+            CoverArtUrl = null,
+            CoverArtUrlLarge = null,
+            IsLocal = false,
+            ExternalProvider = "squidwtf",
+            ExternalId = "345949499"
+        };
+
+        // Act
+        var converted = _builder.ConvertSongToJson(song);
+
+        // Assert
+        Assert.Equal("ext-squidwtf-song-345949499", converted["coverArt"]);
+    }
+
+    [Fact]
+    public void ConvertSongToXml_IncludesCoverArtForResolvableExternalSongWithoutAlbumMetadata()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-squidwtf-song-345949499",
+            Title = "External Search Track",
+            AlbumId = null,
+            CoverArtUrl = null,
+            CoverArtUrlLarge = null,
+            IsLocal = false,
+            ExternalProvider = "squidwtf",
+            ExternalId = "345949499"
+        };
+        var ns = XNamespace.Get("http://subsonic.org/restapi");
+
+        // Act
+        var converted = _builder.ConvertSongToXml(song, ns);
+
+        // Assert
+        Assert.Equal("ext-squidwtf-song-345949499", converted.Attribute("coverArt")?.Value);
+    }
 }

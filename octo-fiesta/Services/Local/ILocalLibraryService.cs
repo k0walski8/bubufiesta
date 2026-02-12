@@ -52,4 +52,11 @@ public interface ILocalLibraryService
     /// Gets the current scan status
     /// </summary>
     Task<ScanStatus?> GetScanStatusAsync();
+
+    /// <summary>
+    /// Removes duplicate audio files from the track's album folder.
+    /// Duplicates are files with the same base track name (ignoring " (n)" suffixes).
+    /// Returns the number of deleted files.
+    /// </summary>
+    Task<int> RemoveDuplicateTracksInAlbumFolderAsync(string trackPath);
 }

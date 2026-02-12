@@ -419,6 +419,20 @@ public abstract class BaseDownloadService : IDownloadService
             {
                 await LocalLibraryService.RegisterDownloadedSongAsync(song, localPath, downloadResult.DownloadedQuality);
 
+                try
+                {
+                    var removedDuplicates = await LocalLibraryService.RemoveDuplicateTracksInAlbumFolderAsync(localPath);
+                    if (removedDuplicates > 0)
+                    {
+                        Logger.LogInformation("Removed {Count} duplicate track file(s) in album folder for {SongId}",
+                            removedDuplicates, songId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed duplicate cleanup for album folder containing {Path}", localPath);
+                }
+
                 // Trigger a Subsonic library rescan (with debounce)
                 _ = Task.Run(async () =>
                 {

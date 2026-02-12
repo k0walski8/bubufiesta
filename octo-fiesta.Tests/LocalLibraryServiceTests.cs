@@ -257,4 +257,54 @@ public class LocalLibraryServiceTests : IDisposable
         Assert.Equal(expectedType, type);
         Assert.Equal(expectedExternalId, externalId);
     }
+
+    [Fact]
+    public async Task RemoveDuplicateTracksInAlbumFolderAsync_WhenPreferredDuplicateExists_KeepsPreferredAndDeletesOthers()
+    {
+        // Arrange
+        var albumFolder = Path.Combine(_testDownloadPath, "Artist", "Album");
+        Directory.CreateDirectory(albumFolder);
+
+        var originalPath = Path.Combine(albumFolder, "01 - Test Song.mp3");
+        var duplicatePath = Path.Combine(albumFolder, "01 - Test Song (1).mp3");
+        var originalLyrics = Path.ChangeExtension(originalPath, ".lrc");
+        var duplicateLyrics = Path.ChangeExtension(duplicatePath, ".lrc");
+
+        await File.WriteAllTextAsync(originalPath, "old-version");
+        await File.WriteAllTextAsync(duplicatePath, "new-version");
+        await File.WriteAllTextAsync(originalLyrics, "old-lyrics");
+        await File.WriteAllTextAsync(duplicateLyrics, "new-lyrics");
+
+        // Act
+        var deletedCount = await _service.RemoveDuplicateTracksInAlbumFolderAsync(duplicatePath);
+
+        // Assert
+        Assert.Equal(1, deletedCount);
+        Assert.False(File.Exists(originalPath));
+        Assert.False(File.Exists(originalLyrics));
+        Assert.True(File.Exists(duplicatePath));
+        Assert.True(File.Exists(duplicateLyrics));
+    }
+
+    [Fact]
+    public async Task RemoveDuplicateTracksInAlbumFolderAsync_WithMp3AndFlac_KeepsPreferredFlac()
+    {
+        // Arrange
+        var albumFolder = Path.Combine(_testDownloadPath, "Artist2", "Album2");
+        Directory.CreateDirectory(albumFolder);
+
+        var mp3Path = Path.Combine(albumFolder, "02 - Test Track.mp3");
+        var flacPath = Path.Combine(albumFolder, "02 - Test Track.flac");
+
+        await File.WriteAllTextAsync(mp3Path, "mp3");
+        await File.WriteAllTextAsync(flacPath, "flac-quality");
+
+        // Act
+        var deletedCount = await _service.RemoveDuplicateTracksInAlbumFolderAsync(flacPath);
+
+        // Assert
+        Assert.Equal(1, deletedCount);
+        Assert.False(File.Exists(mp3Path));
+        Assert.True(File.Exists(flacPath));
+    }
 }

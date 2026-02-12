@@ -338,7 +338,14 @@ public class SubsonicResponseBuilder
 
         // Prefer album cover for tracks so clients show the album artwork consistently.
         var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
-        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(song.CoverArtUrlLarge) || !string.IsNullOrEmpty(albumId))
+        var hasResolvableExternalSongId = !song.IsLocal &&
+            !string.IsNullOrWhiteSpace(song.ExternalProvider) &&
+            !string.IsNullOrWhiteSpace(song.ExternalId);
+        if (song.IsLocal ||
+            !string.IsNullOrEmpty(song.CoverArtUrl) ||
+            !string.IsNullOrEmpty(song.CoverArtUrlLarge) ||
+            !string.IsNullOrEmpty(albumId) ||
+            hasResolvableExternalSongId)
         {
             result["coverArt"] = coverArtId;
         }
@@ -465,7 +472,14 @@ public class SubsonicResponseBuilder
 
         // Prefer album cover for tracks so clients show the album artwork consistently.
         var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
-        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(song.CoverArtUrlLarge) || !string.IsNullOrEmpty(albumId))
+        var hasResolvableExternalSongId = !song.IsLocal &&
+            !string.IsNullOrWhiteSpace(song.ExternalProvider) &&
+            !string.IsNullOrWhiteSpace(song.ExternalId);
+        if (song.IsLocal ||
+            !string.IsNullOrEmpty(song.CoverArtUrl) ||
+            !string.IsNullOrEmpty(song.CoverArtUrlLarge) ||
+            !string.IsNullOrEmpty(albumId) ||
+            hasResolvableExternalSongId)
         {
             songElement.Add(new XAttribute("coverArt", coverArtId));
         }

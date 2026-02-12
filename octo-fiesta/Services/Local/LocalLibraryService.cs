@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using octo_fiesta.Models.Domain;
 using octo_fiesta.Models.Settings;
@@ -15,6 +16,14 @@ namespace octo_fiesta.Services.Local;
 /// </summary>
 public class LocalLibraryService : ILocalLibraryService
 {
+    private static readonly HashSet<string> SupportedAudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav", ".aiff", ".alac", ".opus", ".wma"
+    };
+    private static readonly Regex DuplicateSuffixRegex = new(@"\s\(\d+\)$", RegexOptions.Compiled);
+    private static readonly StringComparison PathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     private readonly string _mappingFilePath;
     private readonly string _downloadDirectory;
     private readonly HttpClient _httpClient;
@@ -153,6 +162,77 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         return (false, null, null, null);
     }
 
+    public async Task<int> RemoveDuplicateTracksInAlbumFolderAsync(string trackPath)
+    {
+        if (string.IsNullOrWhiteSpace(trackPath))
+        {
+            return 0;
+        }
+
+        var normalizedTrackPath = Path.GetFullPath(trackPath);
+        var albumFolder = Path.GetDirectoryName(normalizedTrackPath);
+        if (string.IsNullOrWhiteSpace(albumFolder) || !Directory.Exists(albumFolder))
+        {
+            return 0;
+        }
+
+        var audioFiles = Directory
+            .GetFiles(albumFolder, "*", SearchOption.TopDirectoryOnly)
+            .Where(IsAudioFile)
+            .Select(path => new FileInfo(path))
+            .ToList();
+
+        if (audioFiles.Count < 2)
+        {
+            return 0;
+        }
+
+        var deletedPaths = new List<string>();
+
+        foreach (var group in audioFiles.GroupBy(file => GetNormalizedDuplicateKey(file.Name), StringComparer.OrdinalIgnoreCase))
+        {
+            var files = group.ToList();
+            if (files.Count < 2)
+            {
+                continue;
+            }
+
+            var keepFile = SelectFileToKeep(files, normalizedTrackPath);
+            foreach (var duplicateFile in files)
+            {
+                if (string.Equals(duplicateFile.FullName, keepFile.FullName, PathComparison))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.Delete(duplicateFile.FullName);
+                    deletedPaths.Add(duplicateFile.FullName);
+
+                    var lyricsPath = Path.ChangeExtension(duplicateFile.FullName, ".lrc");
+                    if (File.Exists(lyricsPath))
+                    {
+                        File.Delete(lyricsPath);
+                    }
+
+                    _logger.LogInformation("Deleted duplicate track file: {Path}", duplicateFile.FullName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete duplicate track file: {Path}", duplicateFile.FullName);
+                }
+            }
+        }
+
+        if (deletedPaths.Count > 0)
+        {
+            await RemoveDeletedMappingsAsync(deletedPaths);
+        }
+
+        return deletedPaths.Count;
+    }
+
     private static string NormalizeExternalResourceId(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
@@ -208,6 +288,108 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         }
 
         return withoutScheme;
+    }
+
+    private static bool IsAudioFile(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+        return !string.IsNullOrWhiteSpace(extension) && SupportedAudioExtensions.Contains(extension);
+    }
+
+    private static string GetNormalizedDuplicateKey(string fileName)
+    {
+        var nameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
+        var normalized = DuplicateSuffixRegex.Replace(nameWithoutExtension, string.Empty).Trim();
+        return normalized.ToLowerInvariant();
+    }
+
+    private static FileInfo SelectFileToKeep(List<FileInfo> candidates, string preferredPath)
+    {
+        var preferred = candidates.FirstOrDefault(file =>
+            string.Equals(file.FullName, preferredPath, PathComparison));
+        if (preferred != null)
+        {
+            return preferred;
+        }
+
+        return candidates
+            .OrderByDescending(file => !DuplicateSuffixRegex.IsMatch(Path.GetFileNameWithoutExtension(file.Name)))
+            .ThenByDescending(file => GetExtensionQualityScore(file.Extension))
+            .ThenByDescending(file => file.Length)
+            .ThenByDescending(file => file.LastWriteTimeUtc)
+            .First();
+    }
+
+    private static int GetExtensionQualityScore(string extension)
+    {
+        return extension.ToLowerInvariant() switch
+        {
+            ".flac" => 60,
+            ".wav" or ".aiff" or ".alac" => 50,
+            ".m4a" or ".aac" => 40,
+            ".ogg" or ".opus" => 30,
+            ".mp3" => 20,
+            ".wma" => 10,
+            _ => 0
+        };
+    }
+
+    private async Task RemoveDeletedMappingsAsync(List<string> deletedPaths)
+    {
+        var deletedPathSet = new HashSet<string>(
+            deletedPaths
+                .Select(TryGetNormalizedPath)
+                .OfType<string>(),
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+        var mappings = await LoadMappingsAsync();
+
+        await _lock.WaitAsync();
+        try
+        {
+            var keysToRemove = mappings
+                .Where(kvp =>
+                {
+                    var normalizedPath = TryGetNormalizedPath(kvp.Value.LocalPath);
+                    return normalizedPath != null && deletedPathSet.Contains(normalizedPath);
+                })
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            if (keysToRemove.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var key in keysToRemove)
+            {
+                mappings.Remove(key);
+            }
+
+            await SaveMappingsAsync(mappings);
+            _logger.LogInformation("Removed {Count} stale mapping(s) for deleted duplicate tracks", keysToRemove.Count);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    private static string? TryGetNormalizedPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<Dictionary<string, LocalSongMapping>> LoadMappingsAsync()
