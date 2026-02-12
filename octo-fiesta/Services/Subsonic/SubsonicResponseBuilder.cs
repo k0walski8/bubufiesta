@@ -336,10 +336,9 @@ public class SubsonicResponseBuilder
             ["isVideo"] = false
         };
 
-        // Always expose a coverArt token for tracks so clients can resolve artwork via getCoverArt.
-        // Prefer album cover IDs when available for consistent artwork across songs from the same release.
+        // Prefer album cover for tracks so clients show the album artwork consistently.
         var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
-        if (!string.IsNullOrEmpty(coverArtId))
+        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(albumId))
         {
             result["coverArt"] = coverArtId;
         }
@@ -464,10 +463,9 @@ public class SubsonicResponseBuilder
             new XAttribute("isDir", "false")
         );
 
-        // Always expose a coverArt token for tracks so clients can resolve artwork via getCoverArt.
-        // Prefer album cover IDs when available for consistent artwork across songs from the same release.
+        // Prefer album cover for tracks so clients show the album artwork consistently.
         var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
-        if (!string.IsNullOrEmpty(coverArtId))
+        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(albumId))
         {
             songElement.Add(new XAttribute("coverArt", coverArtId));
         }
