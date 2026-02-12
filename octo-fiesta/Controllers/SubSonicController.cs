@@ -654,27 +654,38 @@ public class SubsonicController : ControllerBase
                 
             case "album":
                 var album = await _metadataService.GetAlbumAsync(coverProvider!, coverExternalId!);
-                if (album?.CoverArtUrl != null)
+                if (!string.IsNullOrEmpty(album?.CoverArtUrl) || !string.IsNullOrEmpty(album?.CoverArtUrlLarge))
                 {
-                    coverUrl = album.CoverArtUrl;
+                    coverUrl = album.CoverArtUrlLarge ?? album.CoverArtUrl;
                 }
                 break;
                 
             case "song":
             default:
-                // For songs, try to get from song first, then album
+                // For songs, try song artwork first, then the linked album artwork.
                 var song = await _metadataService.GetSongAsync(coverProvider!, coverExternalId!);
-                if (song?.CoverArtUrl != null)
+                if (!string.IsNullOrEmpty(song?.CoverArtUrl) || !string.IsNullOrEmpty(song?.CoverArtUrlLarge))
                 {
-                    coverUrl = song.CoverArtUrl;
+                    coverUrl = song.CoverArtUrlLarge ?? song.CoverArtUrl;
                 }
                 else
                 {
-                    // Fallback: try album with same ID (legacy behavior)
-                    var albumFallback = await _metadataService.GetAlbumAsync(coverProvider!, coverExternalId!);
-                    if (albumFallback?.CoverArtUrl != null)
+                    // Fallback: resolve album ID from the song and fetch album artwork.
+                    // Some clients request cover art by song ID in track lists.
+                    if (!string.IsNullOrWhiteSpace(song?.AlbumId))
                     {
-                        coverUrl = albumFallback.CoverArtUrl;
+                        var (albumIsExternal, albumProvider, albumType, albumExternalId) = _localLibraryService.ParseExternalId(song.AlbumId);
+                        if (albumIsExternal &&
+                            string.Equals(albumType, "album", StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(albumExternalId))
+                        {
+                            var albumProviderToUse = string.IsNullOrWhiteSpace(albumProvider) ? coverProvider! : albumProvider!;
+                            var albumFallback = await _metadataService.GetAlbumAsync(albumProviderToUse, albumExternalId);
+                            if (!string.IsNullOrEmpty(albumFallback?.CoverArtUrl) || !string.IsNullOrEmpty(albumFallback?.CoverArtUrlLarge))
+                            {
+                                coverUrl = albumFallback.CoverArtUrlLarge ?? albumFallback.CoverArtUrl;
+                            }
+                        }
                     }
                 }
                 break;

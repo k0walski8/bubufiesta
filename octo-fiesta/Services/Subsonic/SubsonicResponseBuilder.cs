@@ -338,7 +338,7 @@ public class SubsonicResponseBuilder
 
         // Prefer album cover for tracks so clients show the album artwork consistently.
         var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
-        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(albumId))
+        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(song.CoverArtUrlLarge) || !string.IsNullOrEmpty(albumId))
         {
             result["coverArt"] = coverArtId;
         }
@@ -372,7 +372,7 @@ public class SubsonicResponseBuilder
         };
 
         // Only include coverArt if the album has a cover URL (avoids broken images)
-        if (album.IsLocal || !string.IsNullOrEmpty(album.CoverArtUrl))
+        if (album.IsLocal || !string.IsNullOrEmpty(album.CoverArtUrl) || !string.IsNullOrEmpty(album.CoverArtUrlLarge))
         {
             result["coverArt"] = album.Id;
         }
@@ -465,7 +465,7 @@ public class SubsonicResponseBuilder
 
         // Prefer album cover for tracks so clients show the album artwork consistently.
         var coverArtId = !string.IsNullOrEmpty(albumId) ? albumId : song.Id;
-        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(albumId))
+        if (song.IsLocal || !string.IsNullOrEmpty(song.CoverArtUrl) || !string.IsNullOrEmpty(song.CoverArtUrlLarge) || !string.IsNullOrEmpty(albumId))
         {
             songElement.Add(new XAttribute("coverArt", coverArtId));
         }
@@ -503,7 +503,7 @@ public class SubsonicResponseBuilder
         );
 
         // Only include coverArt if the album has a cover URL (avoids broken images)
-        if (album.IsLocal || !string.IsNullOrEmpty(album.CoverArtUrl))
+        if (album.IsLocal || !string.IsNullOrEmpty(album.CoverArtUrl) || !string.IsNullOrEmpty(album.CoverArtUrlLarge))
         {
             element.Add(new XAttribute("coverArt", album.Id));
         }

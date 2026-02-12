@@ -410,4 +410,44 @@ public class SubsonicResponseBuilderTests
         // Assert
         Assert.Equal("ext-squidwtf-album-111", converted.Attribute("coverArt")?.Value);
     }
+
+    [Fact]
+    public void ConvertSongToJson_IncludesCoverArtWhenOnlyLargeCoverIsPresent()
+    {
+        // Arrange
+        var song = new Song
+        {
+            Id = "ext-qobuz-song-1",
+            Title = "Large Cover Song",
+            CoverArtUrl = null,
+            CoverArtUrlLarge = "https://example.com/cover-large.jpg",
+            IsLocal = false
+        };
+
+        // Act
+        var converted = _builder.ConvertSongToJson(song);
+
+        // Assert
+        Assert.Equal("ext-qobuz-song-1", converted["coverArt"]);
+    }
+
+    [Fact]
+    public void ConvertAlbumToJson_IncludesCoverArtWhenOnlyLargeCoverIsPresent()
+    {
+        // Arrange
+        var album = new Album
+        {
+            Id = "ext-qobuz-album-1",
+            Title = "Large Cover Album",
+            CoverArtUrl = null,
+            CoverArtUrlLarge = "https://example.com/cover-large.jpg",
+            IsLocal = false
+        };
+
+        // Act
+        var converted = Assert.IsType<Dictionary<string, object>>(_builder.ConvertAlbumToJson(album));
+
+        // Assert
+        Assert.Equal("ext-qobuz-album-1", converted["coverArt"]);
+    }
 }

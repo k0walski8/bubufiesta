@@ -10,6 +10,7 @@ using IOFile = System.IO.File;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace octo_fiesta.Services.Common;
 
@@ -41,6 +42,16 @@ public abstract class BaseDownloadService : IDownloadService
     private static readonly TimeSpan MetadataCacheNegativeTtl = TimeSpan.FromMinutes(1);
     private readonly IHttpClientFactory _httpClientFactory;
     private const string LyricsApiBaseUrl = "https://lrclib.net/api";
+    private static readonly Regex FeaturedSuffixRegex = new(
+        @"(?i)\s*(?:\(|\[|-)?\s*(?:feat\.?|ft\.?|featuring)\s+[^)\]]*(?:\)|\])?\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex TitleQualifierSuffixRegex = new(
+        @"(?i)\s*(?:\(|\[)\s*(?:remaster(?:ed)?|live|edit|version|mono|stereo|instrumental|karaoke|radio\s+edit|album\s+version|explicit|clean)[^)\]]*(?:\)|\])\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex TitleDashQualifierSuffixRegex = new(
+        @"(?i)\s*-\s*(?:remaster(?:ed)?|live|edit|version|mono|stereo|instrumental|karaoke|radio\s+edit|album\s+version|explicit|clean).*$",
+        RegexOptions.Compiled);
+    private static readonly Regex MultiWhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly TimeSpan MetadataCacheCleanupInterval = TimeSpan.FromMinutes(5);
     private readonly object _metadataCacheCleanupLock = new();
     private DateTime _metadataCacheNextCleanupUtc = DateTime.UtcNow.Add(MetadataCacheCleanupInterval);
@@ -764,38 +775,115 @@ public abstract class BaseDownloadService : IDownloadService
             }
         }
 
+        Logger.LogInformation("No lyrics found for: {Title} - {Artist}", song.Title, song.Artist);
         return null;
     }
 
     private static List<string> BuildLyricsQueryAttempts(Song song)
     {
         var attempts = new List<string>();
-        var trackName = Uri.EscapeDataString(song.Title.Trim());
-        var artistName = Uri.EscapeDataString(song.Artist.Trim());
-        var albumName = string.IsNullOrWhiteSpace(song.Album)
-            ? null
-            : Uri.EscapeDataString(song.Album.Trim());
+        var albumName = string.IsNullOrWhiteSpace(song.Album) ? null : song.Album.Trim();
         var duration = song.Duration.HasValue ? song.Duration.Value.ToString() : null;
 
-        // Most precise lookup first.
-        var precise = $"{LyricsApiBaseUrl}/get?track_name={trackName}&artist_name={artistName}";
-        if (!string.IsNullOrEmpty(albumName))
-        {
-            precise += $"&album_name={albumName}";
-        }
-        if (!string.IsNullOrEmpty(duration))
-        {
-            precise += $"&duration={duration}";
-        }
-        attempts.Add(precise);
+        var queryPairs = BuildLyricsQueryPairs(song.Title, song.Artist);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        // Fallback without strict album/duration matching.
-        attempts.Add($"{LyricsApiBaseUrl}/get?track_name={trackName}&artist_name={artistName}");
+        static void AddAttempt(List<string> target, HashSet<string> seenSet, string value)
+        {
+            if (seenSet.Add(value))
+            {
+                target.Add(value);
+            }
+        }
 
-        // Broad fallback to search endpoint when exact match fails.
-        attempts.Add($"{LyricsApiBaseUrl}/search?track_name={trackName}&artist_name={artistName}");
+        static string BuildGetUrl(string trackName, string artistName, string? albumNameValue, string? durationValue, bool includePreciseFields)
+        {
+            var url =
+                $"{LyricsApiBaseUrl}/get?track_name={Uri.EscapeDataString(trackName)}&artist_name={Uri.EscapeDataString(artistName)}";
+            if (includePreciseFields && !string.IsNullOrWhiteSpace(albumNameValue))
+            {
+                url += $"&album_name={Uri.EscapeDataString(albumNameValue)}";
+            }
+            if (includePreciseFields && !string.IsNullOrWhiteSpace(durationValue))
+            {
+                url += $"&duration={durationValue}";
+            }
+            return url;
+        }
+
+        static string BuildSearchUrl(string trackName, string artistName)
+            => $"{LyricsApiBaseUrl}/search?track_name={Uri.EscapeDataString(trackName)}&artist_name={Uri.EscapeDataString(artistName)}";
+
+        // Most precise lookup first (original metadata + album/duration matching).
+        var firstPair = queryPairs[0];
+        AddAttempt(attempts, seen, BuildGetUrl(firstPair.TrackName, firstPair.ArtistName, albumName, duration, includePreciseFields: true));
+
+        // Fallbacks with progressively normalized metadata.
+        foreach (var pair in queryPairs)
+        {
+            AddAttempt(attempts, seen, BuildGetUrl(pair.TrackName, pair.ArtistName, albumName, duration, includePreciseFields: false));
+        }
+
+        foreach (var pair in queryPairs)
+        {
+            AddAttempt(attempts, seen, BuildSearchUrl(pair.TrackName, pair.ArtistName));
+        }
 
         return attempts;
+    }
+
+    private static List<(string TrackName, string ArtistName)> BuildLyricsQueryPairs(string title, string artist)
+    {
+        var pairs = new List<(string TrackName, string ArtistName)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void AddPair(string trackName, string artistName)
+        {
+            if (string.IsNullOrWhiteSpace(trackName) || string.IsNullOrWhiteSpace(artistName))
+            {
+                return;
+            }
+
+            var cleanTrackName = trackName.Trim();
+            var cleanArtistName = artistName.Trim();
+            var key = $"{cleanTrackName}\u001F{cleanArtistName}";
+            if (seen.Add(key))
+            {
+                pairs.Add((cleanTrackName, cleanArtistName));
+            }
+        }
+
+        var baseTitle = title.Trim();
+        var baseArtist = artist.Trim();
+        var normalizedTitle = NormalizeLyricsLookupValue(baseTitle, isTitle: true);
+        var normalizedArtist = NormalizeLyricsLookupValue(baseArtist, isTitle: false);
+
+        AddPair(baseTitle, baseArtist);
+        AddPair(normalizedTitle, baseArtist);
+        AddPair(baseTitle, normalizedArtist);
+        AddPair(normalizedTitle, normalizedArtist);
+
+        return pairs;
+    }
+
+    private static string NormalizeLyricsLookupValue(string input, bool isTitle)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return string.Empty;
+        }
+
+        var normalized = input.Trim();
+        normalized = FeaturedSuffixRegex.Replace(normalized, string.Empty);
+
+        if (isTitle)
+        {
+            normalized = TitleQualifierSuffixRegex.Replace(normalized, string.Empty);
+            normalized = TitleDashQualifierSuffixRegex.Replace(normalized, string.Empty);
+        }
+
+        normalized = MultiWhitespaceRegex.Replace(normalized, " ").Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? input.Trim() : normalized;
     }
 
     private static LyricsPayload? ParseLyricsResponse(string json)
