@@ -98,6 +98,11 @@ public class SquidWTFDownloadService : BaseDownloadService
             throw new NotSupportedException($"Provider '{externalProvider}' is not supported");
         }
 
+        if (SubsonicSettings.StreamOnly)
+        {
+            return await StreamWithoutDownloadAsync(externalProvider, externalId, cancellationToken);
+        }
+
         var localPath = await GetLocalPathIfExistsAsync(externalProvider, externalId, cancellationToken);
         if (!string.IsNullOrEmpty(localPath))
         {
@@ -133,6 +138,32 @@ public class SquidWTFDownloadService : BaseDownloadService
                 externalId);
             return await base.DownloadAndStreamAsync(externalProvider, externalId, cancellationToken);
         }
+    }
+
+    protected override async Task<Stream> StreamWithoutDownloadAsync(string externalProvider, string externalId, CancellationToken cancellationToken)
+    {
+        if (!externalProvider.Equals(ProviderName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new NotSupportedException($"Provider '{externalProvider}' is not supported");
+        }
+
+        if (IsQobuzSource)
+        {
+            var downloadUrl = await GetQobuzDownloadUrlAsync(externalId, cancellationToken);
+            Logger.LogInformation("Streaming Qobuz track {TrackId} in StreamOnly mode", externalId);
+            return await OpenRemoteStreamAsync(downloadUrl, cancellationToken);
+        }
+
+        var requestedQuality = GetTidalQuality();
+        var (manifest, actualQuality) = await GetTidalManifestWithFallbackAsync(externalId, requestedQuality, cancellationToken);
+        var streamUrl = manifest.Urls![0];
+
+        Logger.LogInformation(
+            "Streaming Tidal track {TrackId} in StreamOnly mode (quality: {Quality})",
+            externalId,
+            actualQuality);
+
+        return await OpenRemoteStreamAsync(streamUrl, cancellationToken);
     }
 
     protected override string? ExtractExternalIdFromAlbumId(string albumId)
@@ -174,25 +205,8 @@ public class SquidWTFDownloadService : BaseDownloadService
 
     private async Task<DownloadResult> DownloadTrackQobuzAsync(string trackId, Song song, CancellationToken cancellationToken)
     {
-        // Get download URL
         var quality = GetQobuzQuality();
-        var url = $"{QobuzBaseUrl}/api/download-music?track_id={trackId}&quality={quality}";
-        
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add(QobuzCountryHeader, QobuzCountryValue);
-        
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var downloadResponse = JsonSerializer.Deserialize<QobuzDownloadResponse>(json);
-        
-        if (downloadResponse?.Success != true || string.IsNullOrEmpty(downloadResponse.Data?.Url))
-        {
-            throw new Exception("Failed to get download URL from SquidWTF Qobuz");
-        }
-        
-        var downloadUrl = downloadResponse.Data.Url;
+        var downloadUrl = await GetQobuzDownloadUrlAsync(trackId, cancellationToken);
         Logger.LogInformation("Got download URL for track {TrackId}: {Title}", trackId, song.Title);
         
         // Determine file extension based on quality
@@ -226,6 +240,28 @@ public class SquidWTFDownloadService : BaseDownloadService
         await WriteMetadataAsync(outputPath, song, cancellationToken);
         
         return new DownloadResult(outputPath, downloadedQuality);
+    }
+
+    private async Task<string> GetQobuzDownloadUrlAsync(string trackId, CancellationToken cancellationToken)
+    {
+        var quality = GetQobuzQuality();
+        var url = $"{QobuzBaseUrl}/api/download-music?track_id={trackId}&quality={quality}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add(QobuzCountryHeader, QobuzCountryValue);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var downloadResponse = JsonSerializer.Deserialize<QobuzDownloadResponse>(json);
+
+        if (downloadResponse?.Success != true || string.IsNullOrEmpty(downloadResponse.Data?.Url))
+        {
+            throw new Exception("Failed to get download URL from SquidWTF Qobuz");
+        }
+
+        return downloadResponse.Data.Url;
     }
 
     private string GetQobuzQuality()

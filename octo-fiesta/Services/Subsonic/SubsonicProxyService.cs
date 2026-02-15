@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using octo_fiesta.Models.Settings;
+using System.Net;
 
 namespace octo_fiesta.Services.Subsonic;
 
@@ -27,16 +28,23 @@ public class SubsonicProxyService
     /// </summary>
     public async Task<(byte[] Body, string? ContentType)> RelayAsync(
         string endpoint, 
-        Dictionary<string, string> parameters)
+        Dictionary<string, string> parameters,
+        CancellationToken cancellationToken = default)
     {
         var query = string.Join("&", parameters.Select(kv => 
             $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
         var url = $"{_subsonicSettings.Url}/{endpoint}?{query}";
+
+        if (IsSelfProxyTarget(url))
+        {
+            throw new InvalidOperationException(
+                "Invalid Subsonic URL: it points to octo-fiesta itself, which would cause a proxy request loop.");
+        }
         
-        HttpResponseMessage response = await _httpClient.GetAsync(url);
+        using HttpResponseMessage response = await _httpClient.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
         
-        var body = await response.Content.ReadAsByteArrayAsync();
+        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
         var contentType = response.Content.Headers.ContentType?.ToString();
         
         return (body, contentType);
@@ -47,11 +55,12 @@ public class SubsonicProxyService
     /// </summary>
     public async Task<(byte[]? Body, string? ContentType, bool Success)> RelaySafeAsync(
         string endpoint, 
-        Dictionary<string, string> parameters)
+        Dictionary<string, string> parameters,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var result = await RelayAsync(endpoint, parameters);
+            var result = await RelayAsync(endpoint, parameters, cancellationToken);
             return (result.Body, result.ContentType, true);
         }
         catch
@@ -81,6 +90,13 @@ public class SubsonicProxyService
     {
         // Build URL with query string from original request
         var url = $"{_subsonicSettings.Url}/{endpoint}{incomingRequest.QueryString}";
+
+        if (IsSelfProxyTarget(url))
+        {
+            var errorBody = System.Text.Encoding.UTF8.GetBytes(
+                "Invalid Subsonic URL: it points to octo-fiesta itself, which would cause a proxy request loop.");
+            return (errorBody, "text/plain; charset=utf-8", 500);
+        }
         
         using var request = new HttpRequestMessage(new HttpMethod(incomingRequest.Method), url);
         
@@ -164,6 +180,17 @@ public class SubsonicProxyService
             var query = string.Join("&", parameters.Select(kv => 
                 $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
             var url = $"{_subsonicSettings.Url}/rest/stream?{query}";
+
+            if (IsSelfProxyTarget(url))
+            {
+                return new ObjectResult(new
+                {
+                    error = "Invalid Subsonic URL: it points to octo-fiesta itself, which would cause a proxy request loop."
+                })
+                {
+                    StatusCode = 500
+                };
+            }
             
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
 
@@ -216,5 +243,71 @@ public class SubsonicProxyService
                 StatusCode = 500
             };
         }
+    }
+
+    private bool IsSelfProxyTarget(string targetUrl)
+    {
+        if (!Uri.TryCreate(targetUrl, UriKind.Absolute, out var targetUri))
+        {
+            return false;
+        }
+
+        var httpContext = _httpContextAccessor.HttpContext;
+        var incomingRequest = httpContext?.Request;
+        if (incomingRequest == null || !incomingRequest.Host.HasValue)
+        {
+            return false;
+        }
+
+        var incomingHost = NormalizeHost(incomingRequest.Host.Host);
+        var targetHost = NormalizeHost(targetUri.Host);
+        var incomingPort = incomingRequest.Host.Port ?? GetDefaultPort(incomingRequest.Scheme);
+        var targetPort = targetUri.IsDefaultPort ? GetDefaultPort(targetUri.Scheme) : targetUri.Port;
+        var incomingFullPath = NormalizePath($"{incomingRequest.PathBase}{incomingRequest.Path}");
+        var targetPath = NormalizePath(targetUri.AbsolutePath);
+
+        return incomingPort == targetPort &&
+               string.Equals(incomingHost, targetHost, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(incomingFullPath, targetPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int GetDefaultPort(string scheme) =>
+        scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80;
+
+    private static string NormalizeHost(string host)
+    {
+        var trimmed = host.Trim('[', ']');
+        if (trimmed.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return "loopback";
+        }
+
+        if (IPAddress.TryParse(trimmed, out var ipAddress) && IPAddress.IsLoopback(ipAddress))
+        {
+            return "loopback";
+        }
+
+        return trimmed;
+    }
+
+    private static string NormalizePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "/";
+        }
+
+        var normalized = path.Trim();
+        if (!normalized.StartsWith('/'))
+        {
+            normalized = "/" + normalized;
+        }
+
+        if (normalized.Length > 1)
+        {
+            normalized = normalized.TrimEnd('/');
+        }
+
+        return normalized;
     }
 }

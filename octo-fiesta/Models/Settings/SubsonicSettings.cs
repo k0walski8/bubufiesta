@@ -149,4 +149,11 @@ public class SubsonicSettings
     /// Lyrics are embedded in audio tags and saved as a .lrc sidecar file
     /// </summary>
     public bool DownloadLyrics { get; set; } = true;
+
+    /// <summary>
+    /// Stream-only mode (default: false)
+    /// Environment variable: STREAM_ONLY
+    /// When enabled, octo-fiesta will not download new tracks to disk and will stream from upstream instead.
+    /// </summary>
+    public bool StreamOnly { get; set; } = false;
 }

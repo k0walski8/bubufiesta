@@ -32,6 +32,8 @@ public class LocalLibraryService : ILocalLibraryService
     private readonly ILogger<LocalLibraryService> _logger;
     private Dictionary<string, LocalSongMapping>? _mappings;
     private readonly SemaphoreSlim _lock = new(1, 1);
+    private readonly object _subsonicAuthLock = new();
+    private readonly Dictionary<string, string> _lastKnownSubsonicAuth = new(StringComparer.OrdinalIgnoreCase);
     
     // Debounce to avoid triggering too many scans
     private DateTime _lastScanTrigger = DateTime.MinValue;
@@ -161,6 +163,44 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         }
         
         return (false, null, null, null);
+    }
+
+    public void UpdateSubsonicAuthParameters(Dictionary<string, string> parameters)
+    {
+        if (parameters.Count == 0)
+        {
+            return;
+        }
+
+        lock (_subsonicAuthLock)
+        {
+            var username = GetNonEmptyValue(parameters, "u");
+            var password = GetNonEmptyValue(parameters, "p");
+            var token = GetNonEmptyValue(parameters, "t");
+            var salt = GetNonEmptyValue(parameters, "s");
+
+            if (!string.IsNullOrWhiteSpace(username))
+            {
+                _lastKnownSubsonicAuth["u"] = username;
+            }
+
+            // Avoid mixing auth modes. Keep token auth OR password auth, never both.
+            if (!string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(salt))
+            {
+                _lastKnownSubsonicAuth["t"] = token;
+                _lastKnownSubsonicAuth["s"] = salt;
+                _lastKnownSubsonicAuth.Remove("p");
+            }
+            else if (!string.IsNullOrWhiteSpace(password))
+            {
+                _lastKnownSubsonicAuth["p"] = password;
+                _lastKnownSubsonicAuth.Remove("t");
+                _lastKnownSubsonicAuth.Remove("s");
+            }
+
+            CopySubsonicAuthParameter(parameters, "v");
+            CopySubsonicAuthParameter(parameters, "c");
+        }
     }
 
     public async Task<int> RemoveDuplicateTracksInAlbumFolderAsync(string trackPath)
@@ -584,11 +624,45 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
             }
         }
 
+        foreach (var kv in GetLastKnownSubsonicAuthParameters())
+        {
+            if (!queryParams.ContainsKey(kv.Key))
+            {
+                queryParams[kv.Key] = kv.Value;
+            }
+        }
+
         queryParams["f"] = "json";
         queryParams["v"] = "1.16.1";
         queryParams["c"] = "octo-fiesta";
 
         return QueryHelpers.AddQueryString(endpointUri.ToString(), queryParams);
+    }
+
+    private void CopySubsonicAuthParameter(Dictionary<string, string> parameters, string key)
+    {
+        var value = GetNonEmptyValue(parameters, key);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        _lastKnownSubsonicAuth[key] = value;
+    }
+
+    private Dictionary<string, string> GetLastKnownSubsonicAuthParameters()
+    {
+        lock (_subsonicAuthLock)
+        {
+            return new Dictionary<string, string>(_lastKnownSubsonicAuth, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string? GetNonEmptyValue(Dictionary<string, string> parameters, string key)
+    {
+        return parameters.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : null;
     }
 
     private static bool TryParseSubsonicResponse(

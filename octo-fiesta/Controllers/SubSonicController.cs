@@ -70,7 +70,9 @@ public class SubsonicController : ControllerBase
     // Extract all parameters (query + body)
     private async Task<Dictionary<string, string>> ExtractAllParameters()
     {
-        return await _requestParser.ExtractAllParametersAsync(Request);
+        var parameters = await _requestParser.ExtractAllParametersAsync(Request);
+        _localLibraryService.UpdateSubsonicAuthParameters(parameters);
+        return parameters;
     }
 
     /// <summary>
@@ -91,7 +93,7 @@ public class SubsonicController : ControllerBase
         {
             try
             {
-                var result = await _proxyService.RelayAsync("rest/search3", parameters);
+                var result = await _proxyService.RelayAsync("rest/search3", parameters, HttpContext.RequestAborted);
                 var contentType = result.ContentType ?? $"application/{format}";
                 return File(result.Body, contentType);
             }
@@ -101,7 +103,7 @@ public class SubsonicController : ControllerBase
             }
         }
 
-        var subsonicTask = _proxyService.RelaySafeAsync("rest/search3", parameters);
+        var subsonicTask = _proxyService.RelaySafeAsync("rest/search3", parameters, HttpContext.RequestAborted);
         var externalTask = _metadataService.SearchAllAsync(
             cleanQuery,
             int.TryParse(parameters.GetValueOrDefault("songCount", "20"), out var sc) ? sc : 20,
@@ -162,6 +164,14 @@ public class SubsonicController : ControllerBase
             var enableRange = downloadStream.CanSeek;
             return File(downloadStream, "audio/mpeg", enableRangeProcessing: enableRange);
         }
+        catch (NotSupportedException ex)
+        {
+            return StatusCode(501, new { error = $"Streaming mode not supported: {ex.Message}" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(409, new { error = ex.Message });
+        }
         catch (Exception ex)
         {
             return StatusCode(500, new { error = $"Failed to stream: {ex.Message}" });
@@ -189,7 +199,7 @@ public class SubsonicController : ControllerBase
 
         if (!isExternal)
         {
-            var result = await _proxyService.RelayAsync("rest/getSong", parameters);
+            var result = await _proxyService.RelayAsync("rest/getSong", parameters, HttpContext.RequestAborted);
             var contentType = result.ContentType ?? $"application/{format}";
             return File(result.Body, contentType);
         }
@@ -249,7 +259,7 @@ public class SubsonicController : ControllerBase
             return _responseBuilder.CreateArtistResponse(format, artist, albums);
         }
 
-        var navidromeResult = await _proxyService.RelaySafeAsync("rest/getArtist", parameters);
+        var navidromeResult = await _proxyService.RelaySafeAsync("rest/getArtist", parameters, HttpContext.RequestAborted);
         
         if (!navidromeResult.Success || navidromeResult.Body == null)
         {
@@ -417,7 +427,7 @@ public class SubsonicController : ControllerBase
             return _responseBuilder.CreateAlbumResponse(format, album);
         }
 
-        var navidromeResult = await _proxyService.RelaySafeAsync("rest/getAlbum", parameters);
+        var navidromeResult = await _proxyService.RelaySafeAsync("rest/getAlbum", parameters, HttpContext.RequestAborted);
         
         if (!navidromeResult.Success || navidromeResult.Body == null)
         {
@@ -638,7 +648,7 @@ public class SubsonicController : ControllerBase
         {
             try
             {
-                var result = await _proxyService.RelayAsync("rest/getCoverArt", parameters);
+                var result = await _proxyService.RelayAsync("rest/getCoverArt", parameters, HttpContext.RequestAborted);
                 var contentType = result.ContentType ?? "image/jpeg";
                 return File(result.Body, contentType);
             }
@@ -731,7 +741,7 @@ public class SubsonicController : ControllerBase
         var (isExternal, provider, externalId) = _localLibraryService.ParseSongId(id);
         if (!isExternal)
         {
-            var result = await _proxyService.RelayAsync(upstreamEndpoint, parameters);
+            var result = await _proxyService.RelayAsync(upstreamEndpoint, parameters, HttpContext.RequestAborted);
             var contentType = result.ContentType ?? $"application/{format}";
             return File(result.Body, contentType);
         }
@@ -760,7 +770,7 @@ public class SubsonicController : ControllerBase
         var (isExternal, provider, externalId) = _localLibraryService.ParseSongId(id);
         if (!isExternal)
         {
-            var result = await _proxyService.RelayAsync(upstreamEndpoint, parameters);
+            var result = await _proxyService.RelayAsync(upstreamEndpoint, parameters, HttpContext.RequestAborted);
             var contentType = result.ContentType ?? $"application/{format}";
             return File(result.Body, contentType);
         }
@@ -950,6 +960,11 @@ public class SubsonicController : ControllerBase
         
         if (!string.IsNullOrEmpty(playlistId) && PlaylistIdHelper.IsExternalPlaylist(playlistId))
         {
+            if (_subsonicSettings.StreamOnly)
+            {
+                return _responseBuilder.CreateError(format, 0, "Playlist download is disabled in StreamOnly mode");
+            }
+
             if (_playlistSyncService == null)
             {
                 return _responseBuilder.CreateError(format, 0, "Playlist functionality is not enabled");
@@ -977,7 +992,7 @@ public class SubsonicController : ControllerBase
         // For non-playlist items, relay to real Subsonic server
         try
         {
-            var result = await _proxyService.RelayAsync("rest/star", parameters);
+            var result = await _proxyService.RelayAsync("rest/star", parameters, HttpContext.RequestAborted);
             var contentType = result.ContentType ?? $"application/{format}";
             return File(result.Body, contentType);
         }

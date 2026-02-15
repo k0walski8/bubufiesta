@@ -42,6 +42,12 @@ public interface ILocalLibraryService
     /// Also supports legacy format: ext-{provider}-{id} (assumes song type)
     /// </summary>
     (bool isExternal, string? provider, string? type, string? externalId) ParseExternalId(string id);
+
+    /// <summary>
+    /// Stores Subsonic authentication parameters from incoming client requests
+    /// so background operations (e.g., library scan) can authenticate.
+    /// </summary>
+    void UpdateSubsonicAuthParameters(Dictionary<string, string> parameters);
     
     /// <summary>
     /// Triggers a Subsonic library scan

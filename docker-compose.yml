@@ -31,6 +31,8 @@ services:
       - Subsonic__AutoUpgradeQuality=${AUTO_UPGRADE_QUALITY:-false}
       # Download lyrics and save as embedded tags + .lrc sidecar (default: true)
       - Subsonic__DownloadLyrics=${DOWNLOAD_LYRICS:-true}
+      # Stream-only mode: do not download new tracks, stream directly from upstream (default: false)
+      - Subsonic__StreamOnly=${STREAM_ONLY:-false}
       
       # ===== DEEZER SETTINGS =====
       # Deezer ARL token (required if using Deezer)

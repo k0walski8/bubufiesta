@@ -112,11 +112,21 @@ public abstract class BaseDownloadService : IDownloadService
 
     public async Task<string> DownloadSongAsync(string externalProvider, string externalId, CancellationToken cancellationToken = default)
     {
+        if (SubsonicSettings.StreamOnly)
+        {
+            throw new InvalidOperationException("Downloads are disabled because StreamOnly mode is enabled.");
+        }
+
         return await DownloadSongInternalAsync(externalProvider, externalId, triggerAlbumDownload: true, cancellationToken);
     }
 
     public virtual async Task<Stream> DownloadAndStreamAsync(string externalProvider, string externalId, CancellationToken cancellationToken = default)
     {
+        if (SubsonicSettings.StreamOnly)
+        {
+            return await StreamWithoutDownloadAsync(externalProvider, externalId, cancellationToken);
+        }
+
         var localPath = await DownloadSongInternalAsync(externalProvider, externalId, triggerAlbumDownload: true, cancellationToken);
         return IOFile.OpenRead(localPath);
     }
@@ -155,6 +165,12 @@ public abstract class BaseDownloadService : IDownloadService
 
     public void DownloadRemainingAlbumTracksInBackground(string externalProvider, string albumExternalId, string excludeTrackExternalId)
     {
+        if (SubsonicSettings.StreamOnly)
+        {
+            Logger.LogDebug("Skipping album background download because StreamOnly mode is enabled");
+            return;
+        }
+
         if (externalProvider != ProviderName)
         {
             Logger.LogWarning("Provider '{Provider}' is not supported for album download", externalProvider);
@@ -204,6 +220,15 @@ public abstract class BaseDownloadService : IDownloadService
     /// Used for quality upgrade comparison.
     /// </summary>
     protected abstract string? GetTargetQuality();
+
+    /// <summary>
+    /// Streams audio without writing files to disk. Providers can override this for stream-only mode.
+    /// </summary>
+    protected virtual Task<Stream> StreamWithoutDownloadAsync(string externalProvider, string externalId, CancellationToken cancellationToken)
+    {
+        throw new NotSupportedException(
+            $"{ProviderName} does not support stream-only mode. Disable StreamOnly or use a provider with direct streaming support.");
+    }
 
     #endregion
 
