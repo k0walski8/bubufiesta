@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 using octo_fiesta.Models.Domain;
 using octo_fiesta.Models.Settings;
@@ -445,32 +446,40 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
                 (now - _lastScanTrigger).TotalSeconds);
             return true;
         }
-        
-        _lastScanTrigger = now;
-        
+
         try
         {
-            // Call Subsonic API to trigger a scan
-            // Note: This endpoint works without authentication on most Subsonic/Navidrome servers
-            // when called from localhost. For remote servers requiring auth, this would need
-            // to be refactored to accept credentials from the controller layer.
-            var url = $"{_subsonicSettings.Url}/rest/startScan?f=json";
-            
+            var url = BuildSubsonicApiUrl("rest/startScan.view");
             _logger.LogInformation("Triggering Subsonic library scan...");
             
-            var response = await _httpClient.GetAsync(url);
-            
-            if (response.IsSuccessStatusCode)
+            using var response = await _httpClient.GetAsync(url);
+
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
             {
-                var content = await response.Content.ReadAsStringAsync();
-                _logger.LogInformation("Subsonic scan triggered successfully: {Response}", content);
-                return true;
-            }
-            else
-            {
-                _logger.LogWarning("Failed to trigger Subsonic scan: {StatusCode} - Server may require authentication", response.StatusCode);
+                _logger.LogWarning(
+                    "Failed to trigger Subsonic scan: HTTP {StatusCode}. Response: {Response}",
+                    (int)response.StatusCode,
+                    content);
                 return false;
             }
+
+            if (TryParseSubsonicResponse(content, out var status, out var errorCode, out var errorMessage))
+            {
+                if (!string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning(
+                        "Subsonic scan request failed: status={Status}, code={Code}, message={Message}",
+                        status ?? "unknown",
+                        errorCode?.ToString() ?? "n/a",
+                        errorMessage ?? "n/a");
+                    return false;
+                }
+            }
+
+            _lastScanTrigger = now;
+            _logger.LogInformation("Subsonic scan triggered successfully.");
+            return true;
         }
         catch (Exception ex)
         {
@@ -483,25 +492,44 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
     {
         try
         {
-            // Note: This endpoint works without authentication on most Subsonic/Navidrome servers
-            // when called from localhost.
-            var url = $"{_subsonicSettings.Url}/rest/getScanStatus?f=json";
+            var url = BuildSubsonicApiUrl("rest/getScanStatus.view");
             
-            var response = await _httpClient.GetAsync(url);
+            using var response = await _httpClient.GetAsync(url);
             
             if (response.IsSuccessStatusCode)
             {
                 var content = await response.Content.ReadAsStringAsync();
                 var doc = JsonDocument.Parse(content);
                 
-                if (doc.RootElement.TryGetProperty("subsonic-response", out var subsonicResponse) &&
-                    subsonicResponse.TryGetProperty("scanStatus", out var scanStatus))
+                if (doc.RootElement.TryGetProperty("subsonic-response", out var subsonicResponse))
                 {
-                    return new ScanStatus
+                    if (subsonicResponse.TryGetProperty("status", out var statusElement) &&
+                        string.Equals(statusElement.GetString(), "failed", StringComparison.OrdinalIgnoreCase))
                     {
-                        Scanning = scanStatus.TryGetProperty("scanning", out var scanning) && scanning.GetBoolean(),
-                        Count = scanStatus.TryGetProperty("count", out var count) ? count.GetInt32() : null
-                    };
+                        var code = subsonicResponse.TryGetProperty("error", out var error) &&
+                                   error.TryGetProperty("code", out var codeElement)
+                            ? codeElement.GetInt32()
+                            : (int?)null;
+                        var message = subsonicResponse.TryGetProperty("error", out error) &&
+                                      error.TryGetProperty("message", out var msgElement)
+                            ? msgElement.GetString()
+                            : null;
+
+                        _logger.LogWarning(
+                            "Failed to get Subsonic scan status: code={Code}, message={Message}",
+                            code?.ToString() ?? "n/a",
+                            message ?? "n/a");
+                        return null;
+                    }
+
+                    if (subsonicResponse.TryGetProperty("scanStatus", out var scanStatus))
+                    {
+                        return new ScanStatus
+                        {
+                            Scanning = scanStatus.TryGetProperty("scanning", out var scanning) && scanning.GetBoolean(),
+                            Count = scanStatus.TryGetProperty("count", out var count) ? count.GetInt32() : null
+                        };
+                    }
                 }
             }
         }
@@ -511,6 +539,100 @@ public async Task RegisterDownloadedSongAsync(Song song, string localPath, strin
         }
         
         return null;
+    }
+
+    private string BuildSubsonicApiUrl(string endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(_subsonicSettings.Url))
+        {
+            throw new InvalidOperationException("Subsonic URL is not configured");
+        }
+
+        var normalizedBase = _subsonicSettings.Url.TrimEnd('/') + "/";
+        var baseUri = new Uri(normalizedBase, UriKind.Absolute);
+        var endpointUri = new Uri(baseUri, endpoint.TrimStart('/'));
+
+        var queryParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var kv in QueryHelpers.ParseQuery(baseUri.Query))
+        {
+            var value = kv.Value.ToString();
+            if (!string.IsNullOrEmpty(kv.Key) && !string.IsNullOrWhiteSpace(value))
+            {
+                queryParams[kv.Key] = value;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(baseUri.UserInfo))
+        {
+            var userInfo = baseUri.UserInfo;
+            var separatorIndex = userInfo.IndexOf(':');
+            if (separatorIndex > 0)
+            {
+                var username = Uri.UnescapeDataString(userInfo[..separatorIndex]);
+                var password = Uri.UnescapeDataString(userInfo[(separatorIndex + 1)..]);
+                if (!string.IsNullOrWhiteSpace(username) && !queryParams.ContainsKey("u"))
+                {
+                    queryParams["u"] = username;
+                }
+                if (!string.IsNullOrWhiteSpace(password) &&
+                    !queryParams.ContainsKey("p") &&
+                    !queryParams.ContainsKey("t"))
+                {
+                    queryParams["p"] = password;
+                }
+            }
+        }
+
+        queryParams["f"] = "json";
+        queryParams["v"] = "1.16.1";
+        queryParams["c"] = "octo-fiesta";
+
+        return QueryHelpers.AddQueryString(endpointUri.ToString(), queryParams);
+    }
+
+    private static bool TryParseSubsonicResponse(
+        string content,
+        out string? status,
+        out int? errorCode,
+        out string? errorMessage)
+    {
+        status = null;
+        errorCode = null;
+        errorMessage = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            if (!doc.RootElement.TryGetProperty("subsonic-response", out var response))
+            {
+                return false;
+            }
+
+            if (response.TryGetProperty("status", out var statusElement))
+            {
+                status = statusElement.GetString();
+            }
+
+            if (response.TryGetProperty("error", out var error))
+            {
+                if (error.TryGetProperty("code", out var codeElement))
+                {
+                    errorCode = codeElement.GetInt32();
+                }
+
+                if (error.TryGetProperty("message", out var messageElement))
+                {
+                    errorMessage = messageElement.GetString();
+                }
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 

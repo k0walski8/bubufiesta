@@ -146,12 +146,21 @@ public class SubsonicController : ControllerBase
             return await _proxyService.RelayStreamAsync(parameters, HttpContext.RequestAborted);
         }
 
-        // Always go through DownloadAndStreamAsync for external songs
-        // This ensures quality upgrade logic is applied
         try
         {
+            // If already downloaded/cached, prefer local file for faster startup and proper range support.
+            var localPath = await _downloadService.GetLocalPathIfExistsAsync(provider!, externalId!, HttpContext.RequestAborted);
+            if (!string.IsNullOrEmpty(localPath) &&
+                System.IO.File.Exists(localPath) &&
+                !_subsonicSettings.AutoUpgradeQuality)
+            {
+                var localContentType = GetContentType(localPath);
+                return PhysicalFile(localPath, localContentType, enableRangeProcessing: true);
+            }
+
             var downloadStream = await _downloadService.DownloadAndStreamAsync(provider!, externalId!, HttpContext.RequestAborted);
-            return File(downloadStream, "audio/mpeg", enableRangeProcessing: true);
+            var enableRange = downloadStream.CanSeek;
+            return File(downloadStream, "audio/mpeg", enableRangeProcessing: enableRange);
         }
         catch (Exception ex)
         {
