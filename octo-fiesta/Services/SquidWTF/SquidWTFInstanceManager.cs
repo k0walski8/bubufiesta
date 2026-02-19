@@ -199,7 +199,7 @@ public class SquidWTFInstanceManager
             _logger.LogError(ex, "Failed to load instances from remote JSON, using fallback");
             
             // Fallback to hardcoded instance
-            _tidalInstances = new List<string> { "https://hund.qqdl.site", "https://tidal.kinoplus.online" };
+            _tidalInstances = new List<string> { "https://hund.qqdl.site" };
             _currentInstanceIndex = 0;
             _currentTidalInstance = _tidalInstances[0];
         }
