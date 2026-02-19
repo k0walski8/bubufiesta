@@ -19,6 +19,8 @@ namespace octo_fiesta.Controllers;
 [Route("")]
 public class SubsonicController : ControllerBase
 {
+    private static readonly byte[] TransparentCoverArtPng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=");
+
     private readonly SubsonicSettings _subsonicSettings;
     private readonly IMusicMetadataService _metadataService;
     private readonly ILocalLibraryService _localLibraryService;
@@ -621,14 +623,15 @@ public class SubsonicController : ControllerBase
                 
                 if (playlist == null || string.IsNullOrEmpty(playlist.CoverUrl))
                 {
-                    return NotFound();
+                    return CreateExternalCoverArtFallback(id);
                 }
                 
                 // Download and return the cover image
-                var imageResponse = await new HttpClient().GetAsync(playlist.CoverUrl);
+                using var playlistImageClient = new HttpClient();
+                using var imageResponse = await playlistImageClient.GetAsync(playlist.CoverUrl, HttpContext.RequestAborted);
                 if (!imageResponse.IsSuccessStatusCode)
                 {
-                    return NotFound();
+                    return CreateExternalCoverArtFallback(id);
                 }
                 
                 var imageBytes = await imageResponse.Content.ReadAsByteArrayAsync();
@@ -638,7 +641,7 @@ public class SubsonicController : ControllerBase
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting playlist cover art for {Id}", id);
-                return NotFound();
+                return CreateExternalCoverArtFallback(id);
             }
         }
 
@@ -710,19 +713,26 @@ public class SubsonicController : ControllerBase
                 break;
         }
         
-        if (coverUrl != null)
+        if (!string.IsNullOrWhiteSpace(coverUrl))
         {
-            using var httpClient = new HttpClient();
-            var response = await httpClient.GetAsync(coverUrl);
-            if (response.IsSuccessStatusCode)
+            try
             {
-                var imageBytes = await response.Content.ReadAsByteArrayAsync();
-                var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/jpeg";
-                return File(imageBytes, contentType);
+                using var httpClient = new HttpClient();
+                using var response = await httpClient.GetAsync(coverUrl, HttpContext.RequestAborted);
+                if (response.IsSuccessStatusCode)
+                {
+                    var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                    var contentType = response.Content.Headers.ContentType?.ToString() ?? "image/jpeg";
+                    return File(imageBytes, contentType);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed downloading external cover art for {Id} from {CoverUrl}", id, coverUrl);
             }
         }
 
-        return NotFound();
+        return CreateExternalCoverArtFallback(id);
     }
 
     #region Helper Methods
@@ -943,6 +953,12 @@ public class SubsonicController : ControllerBase
     }
 
     #endregion
+
+    private IActionResult CreateExternalCoverArtFallback(string id)
+    {
+        _logger.LogDebug("Returning placeholder cover art for unresolved external id {Id}", id);
+        return File(TransparentCoverArtPng, "image/png");
+    }
 
     /// <summary>
     /// Stars (favorites) an item. For playlists, this triggers a full download.
